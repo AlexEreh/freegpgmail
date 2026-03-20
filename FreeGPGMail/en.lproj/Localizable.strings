@@ -1,0 +1,106 @@
+/* General */
+"app.name" = "FreeGPGMail";
+"app.subtitle" = "Free GPG encryption for Apple Mail";
+
+/* Status */
+"status.checking" = "Checking GPG...";
+"status.installed" = "GPG installed";
+"status.not_installed" = "GPG not found";
+"status.title" = "Status";
+
+/* Setup */
+"setup.title" = "Setup";
+"setup.step1" = "Install GPG: brew install gnupg";
+"setup.step2" = "Generate a key: gpg --full-generate-key";
+"setup.step3" = "Open System Settings → Extensions → Mail";
+"setup.step4" = "Enable FreeGPGMail";
+"setup.step5" = "Restart Mail";
+
+/* Keys */
+"keys.title" = "GPG Keys";
+"keys.none" = "No keys found. Generate one with gpg --full-generate-key";
+"keys.refresh" = "Refresh";
+"keys.default" = "Default";
+"keys.secret_title" = "Secret Keys";
+"keys.public_title" = "Public Keys";
+
+/* Settings */
+"settings.title" = "Settings";
+"settings.auto_sign" = "Automatically sign outgoing messages";
+"settings.auto_encrypt" = "Automatically encrypt (when all recipients have keys)";
+"settings.block_remote" = "Block remote content in encrypted messages";
+"settings.default_key" = "Default Key";
+"settings.default_key.auto" = "Automatic (by sender email)";
+"settings.sign.title" = "Signing";
+"settings.encrypt.title" = "Encryption";
+"settings.agent.title" = "GPG Agent";
+"settings.pinentry_mode" = "Pinentry mode";
+"settings.pinentry.default" = "Default";
+"settings.pinentry.ask" = "Always ask";
+"settings.pinentry.loopback" = "Loopback";
+"settings.cache_ttl" = "Key cache TTL:";
+
+/* Diagnostics */
+"diag.title" = "Diagnostics";
+"diag.logging" = "Logging";
+"diag.logging.enable" = "Enable logging";
+"diag.logging.hint" = "Logs available in Console.app (subsystem com.freegpgmail.app)";
+"diag.actions.title" = "Actions";
+"diag.export" = "Export diagnostics";
+"diag.reset_cache" = "Reset key cache";
+"diag.restart_agent" = "Restart gpg-agent";
+
+/* Key Management */
+"keymgmt.title" = "Key Management";
+"keymgmt.search" = "Search keyserver";
+"keymgmt.search.placeholder" = "Email or Key ID";
+"keymgmt.search.button" = "Search";
+"keymgmt.import" = "Import Key";
+"keymgmt.from_clipboard" = "From clipboard";
+"keymgmt.from_file" = "From file...";
+"keymgmt.paste_text" = "Paste text...";
+
+/* Security Banners */
+"banner.encrypted" = "Encrypted message decrypted";
+"banner.decrypt_failed" = "Failed to decrypt message";
+"banner.signed_valid" = "Signed: %@";
+"banner.signed_invalid" = "Invalid signature";
+"banner.signed_multiple" = "Signed (%d): %@";
+"banner.details" = "Details";
+"banner.encrypted_signed" = "Encrypted and signed (%@)";
+
+/* Compose */
+"compose.auto" = "Auto (by email)";
+"compose.sign_available" = "Signing available";
+"compose.sign_unavailable" = "No signing key";
+"compose.encrypt_available" = "Encryption available (all recipient keys found)";
+"compose.encrypt_unavailable" = "Encryption unavailable (missing recipient keys)";
+"compose.gpg_unavailable" = "GPG unavailable";
+
+/* Address Annotations */
+"annotation.key_found" = "GPG key found";
+"annotation.key_not_found" = "GPG key not found — encryption unavailable";
+
+/* Errors */
+"error.signing_failed" = "Failed to sign message";
+"error.encryption_failed" = "Failed to encrypt message";
+"error.decryption_failed" = "Failed to decrypt message";
+"error.verification_failed" = "Invalid signature";
+"error.gpg_not_found" = "GPG not found. Install: brew install gnupg";
+
+/* Security Info */
+"secinfo.encrypted" = "Encrypted";
+"secinfo.signed" = "Signed: %@";
+"secinfo.invalid_sig" = "Invalid signature";
+"secinfo.invalid_sig_from" = "Invalid signature: %@";
+"secinfo.key" = "Key: %@";
+"secinfo.decrypt_error" = "Decryption error: %@";
+"secinfo.no_data" = "No security information";
+
+/* Trust */
+"trust.ultimate" = "ultimate trust";
+"trust.full" = "trusted";
+"trust.marginal" = "marginal trust";
+"trust.undefined" = "trust not set";
+"trust.never" = "not trusted!";
+"trust.expired" = "key expired!";

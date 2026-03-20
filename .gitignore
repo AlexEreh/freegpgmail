@@ -1,0 +1,12 @@
+## Xcode
+build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/
+FreeGPGMail.xcodeproj/
+
+## macOS
+.DS_Store
+*.swp
+*~

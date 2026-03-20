@@ -1,0 +1,106 @@
+/* General */
+"app.name" = "FreeGPGMail";
+"app.subtitle" = "Бесплатное GPG-шифрование для Apple Mail";
+
+/* Status */
+"status.checking" = "Проверяю GPG...";
+"status.installed" = "GPG установлен";
+"status.not_installed" = "GPG не найден";
+"status.title" = "Статус";
+
+/* Setup */
+"setup.title" = "Настройка";
+"setup.step1" = "Установите GPG: brew install gnupg";
+"setup.step2" = "Создайте ключ: gpg --full-generate-key";
+"setup.step3" = "Откройте Системные настройки → Расширения → Mail";
+"setup.step4" = "Включите FreeGPGMail";
+"setup.step5" = "Перезапустите Mail";
+
+/* Keys */
+"keys.title" = "GPG-ключи";
+"keys.none" = "Ключи не найдены. Создайте ключ командой gpg --full-generate-key";
+"keys.refresh" = "Обновить";
+"keys.default" = "По умолчанию";
+"keys.secret_title" = "Секретные ключи";
+"keys.public_title" = "Публичные ключи";
+
+/* Settings */
+"settings.title" = "Настройки";
+"settings.auto_sign" = "Автоматически подписывать исходящие письма";
+"settings.auto_encrypt" = "Автоматически шифровать (если есть ключи всех получателей)";
+"settings.block_remote" = "Блокировать удалённый контент в зашифрованных письмах";
+"settings.default_key" = "Ключ по умолчанию";
+"settings.default_key.auto" = "Автоматически (по email отправителя)";
+"settings.sign.title" = "Подпись";
+"settings.encrypt.title" = "Шифрование";
+"settings.agent.title" = "GPG Agent";
+"settings.pinentry_mode" = "Режим pinentry";
+"settings.pinentry.default" = "По умолчанию";
+"settings.pinentry.ask" = "Всегда спрашивать";
+"settings.pinentry.loopback" = "Loopback";
+"settings.cache_ttl" = "TTL кэша ключей:";
+
+/* Diagnostics */
+"diag.title" = "Диагностика";
+"diag.logging" = "Логирование";
+"diag.logging.enable" = "Включить логирование";
+"diag.logging.hint" = "Логи доступны через Console.app (подсистема com.freegpgmail.app)";
+"diag.actions.title" = "Действия";
+"diag.export" = "Экспорт диагностики";
+"diag.reset_cache" = "Сбросить кэш ключей";
+"diag.restart_agent" = "Перезапустить gpg-agent";
+
+/* Key Management */
+"keymgmt.title" = "Управление ключами";
+"keymgmt.search" = "Поиск на сервере ключей";
+"keymgmt.search.placeholder" = "Email или ID ключа";
+"keymgmt.search.button" = "Найти";
+"keymgmt.import" = "Импорт ключа";
+"keymgmt.from_clipboard" = "Из буфера обмена";
+"keymgmt.from_file" = "Из файла...";
+"keymgmt.paste_text" = "Вставить текст...";
+
+/* Security Banners */
+"banner.encrypted" = "Зашифрованное сообщение расшифровано";
+"banner.decrypt_failed" = "Не удалось расшифровать сообщение";
+"banner.signed_valid" = "Подписано: %@";
+"banner.signed_invalid" = "Недействительная подпись";
+"banner.signed_multiple" = "Подписано (%d): %@";
+"banner.details" = "Подробнее";
+"banner.encrypted_signed" = "Зашифровано и подписано (%@)";
+
+/* Compose */
+"compose.auto" = "Авто (по email)";
+"compose.sign_available" = "Подпись доступна";
+"compose.sign_unavailable" = "Нет ключа для подписи";
+"compose.encrypt_available" = "Шифрование доступно (ключи всех получателей найдены)";
+"compose.encrypt_unavailable" = "Шифрование недоступно (не все ключи найдены)";
+"compose.gpg_unavailable" = "GPG недоступен";
+
+/* Address Annotations */
+"annotation.key_found" = "GPG-ключ найден";
+"annotation.key_not_found" = "GPG-ключ не найден — шифрование недоступно";
+
+/* Errors */
+"error.signing_failed" = "Не удалось подписать сообщение";
+"error.encryption_failed" = "Не удалось зашифровать сообщение";
+"error.decryption_failed" = "Не удалось расшифровать сообщение";
+"error.verification_failed" = "Подпись недействительна";
+"error.gpg_not_found" = "GPG не найден. Установите: brew install gnupg";
+
+/* Security Info */
+"secinfo.encrypted" = "Зашифровано";
+"secinfo.signed" = "Подписано: %@";
+"secinfo.invalid_sig" = "Недействительная подпись";
+"secinfo.invalid_sig_from" = "Недействительная подпись: %@";
+"secinfo.key" = "Ключ: %@";
+"secinfo.decrypt_error" = "Ошибка расшифровки: %@";
+"secinfo.no_data" = "Нет данных о безопасности";
+
+/* Trust */
+"trust.ultimate" = "полное доверие";
+"trust.full" = "доверенный";
+"trust.marginal" = "частичное доверие";
+"trust.undefined" = "доверие не задано";
+"trust.never" = "не доверенный!";
+"trust.expired" = "ключ истёк!";

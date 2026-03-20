@@ -1,0 +1,57 @@
+name: FreeGPGMail
+options:
+  bundleIdPrefix: com.freegpgmail
+  deploymentTarget:
+    macOS: "12.0"
+  xcodeVersion: "15.0"
+  minimumXcodeGenVersion: "2.35"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "12.0"
+    CODE_SIGN_IDENTITY: "Apple Development"
+    DEVELOPMENT_TEAM: 3NUCM2Y5WR
+
+targets:
+  FreeGPGMail:
+    type: application
+    platform: macOS
+    sources:
+      - path: FreeGPGMail
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.freegpgmail.app
+        PRODUCT_NAME: FreeGPGMail
+        INFOPLIST_FILE: FreeGPGMail/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FreeGPGMail/FreeGPGMail.entitlements
+        CODE_SIGN_STYLE: Automatic
+        COMBINE_HIDPI_IMAGES: YES
+        ENABLE_HARDENED_RUNTIME: YES
+    dependencies:
+      - target: FreeGPGMailExtension
+    entitlements:
+      path: FreeGPGMail/FreeGPGMail.entitlements
+
+  FreeGPGMailExtension:
+    type: app-extension
+    platform: macOS
+    product: FreeGPGMailExtension.appex
+    sources:
+      - path: FreeGPGMailExtension
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.freegpgmail.app.mail-extension
+        PRODUCT_NAME: FreeGPGMailExtension
+        INFOPLIST_FILE: FreeGPGMailExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FreeGPGMailExtension/FreeGPGMailExtension.entitlements
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: YES
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/../Frameworks"
+          - "@executable_path/../../../../Frameworks"
+    frameworks:
+      - sdk: MailKit.framework
