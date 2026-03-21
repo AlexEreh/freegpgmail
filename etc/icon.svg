@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Background with rounded corners -->
+  <rect width="1024" height="1024" rx="225" fill="#222222"/>
+
+  <!-- Shield: rect top + pointed bottom -->
+  <path d="M175 115 L849 115 L849 525 L512 900 L175 525 Z" fill="#000000" stroke="#333333" stroke-width="2"/>
+
+  <!-- Envelope body (white filled) -->
+  <rect x="172" y="395" width="680" height="460" fill="none"/>
+  <!-- Centered envelope -->
+  <rect x="252" y="355" width="520" height="350" fill="white"/>
+
+  <!-- V-flap lines -->
+  <line x1="252" y1="355" x2="512" y2="530" stroke="#222222" stroke-width="4"/>
+  <line x1="772" y1="355" x2="512" y2="530" stroke="#222222" stroke-width="4"/>
+</svg>
