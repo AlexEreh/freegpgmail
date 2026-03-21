@@ -10,16 +10,11 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            headerView
-            Divider()
-            TabView(selection: $selectedTab) {
-                statusTab.tag(0).tabItem { Label("Статус", systemImage: "info.circle") }
-                keyManagementTab.tag(1).tabItem { Label("Ключи", systemImage: "key.2.on.ring") }
-                settingsTab.tag(2).tabItem { Label("Настройки", systemImage: "gear") }
-                diagnosticsTab.tag(3).tabItem { Label("Диагностика", systemImage: "stethoscope") }
-            }
-            .padding(0)
+        TabView(selection: $selectedTab) {
+            statusTab.tag(0).tabItem { Label("Статус", systemImage: "info.circle") }
+            keyManagementTab.tag(1).tabItem { Label("Ключи", systemImage: "key.2.on.ring") }
+            settingsTab.tag(2).tabItem { Label("Настройки", systemImage: "gear") }
+            diagnosticsTab.tag(3).tabItem { Label("Диагностика", systemImage: "stethoscope") }
         }
         .frame(width: 600, height: 600)
         .task {
@@ -43,8 +38,6 @@ struct ContentView: View {
             }
             Spacer()
         }
-        .padding(20)
-        .background(.ultraThinMaterial)
     }
 
     // MARK: - Key Management Tab
@@ -58,6 +51,7 @@ struct ContentView: View {
     private var statusTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                headerView
                 statusSection
                 setupInstructionsSection
                 keysSection
@@ -177,6 +171,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 20) {
                 signingSettingsSection
                 encryptionSettingsSection
+                privacySettingsSection
                 defaultKeySection
                 agentSettingsSection
             }
@@ -213,6 +208,59 @@ struct ContentView: View {
                 get: { Settings.shared.blockRemoteContentForEncrypted },
                 set: { Settings.shared.blockRemoteContentForEncrypted = $0 }
             ))
+
+            Toggle("Шифровать тему письма (Protected Headers)", isOn: Binding(
+                get: { Settings.shared.protectedHeaders },
+                set: { Settings.shared.protectedHeaders = $0 }
+            ))
+
+            HStack {
+                Text("Формат PGP:")
+                Picker("", selection: Binding(
+                    get: { Settings.shared.preferredPGPFormat },
+                    set: { Settings.shared.preferredPGPFormat = $0 }
+                )) {
+                    Text("PGP/MIME (рекомендуется)").tag("pgpmime")
+                    Text("Inline PGP (совместимость)").tag("inline")
+                }
+                .labelsHidden()
+                .frame(width: 250)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary))
+    }
+
+    private var privacySettingsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Обнаружение ключей")
+                .font(.headline)
+
+            Toggle("WKD — автопоиск ключей по домену email", isOn: Binding(
+                get: { Settings.shared.wkdAutoLookup },
+                set: { Settings.shared.wkdAutoLookup = $0 }
+            ))
+
+            Toggle("Autocrypt — обмен ключами через заголовки писем", isOn: Binding(
+                get: { Settings.shared.autocryptEnabled },
+                set: { Settings.shared.autocryptEnabled = $0 }
+            ))
+
+            HStack {
+                Text("Предупреждать об истечении ключей за:")
+                Picker("", selection: Binding(
+                    get: { Settings.shared.keyExpiryWarningDays },
+                    set: { Settings.shared.keyExpiryWarningDays = $0 }
+                )) {
+                    Text("7 дней").tag(7)
+                    Text("14 дней").tag(14)
+                    Text("30 дней").tag(30)
+                    Text("90 дней").tag(90)
+                }
+                .labelsHidden()
+                .frame(width: 120)
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -274,6 +322,27 @@ struct ContentView: View {
                 }
                 .labelsHidden()
                 .frame(width: 120)
+            }
+
+            HStack {
+                Text("Синхронизация ключей:")
+                Picker("", selection: Binding(
+                    get: { Settings.shared.keySyncInterval },
+                    set: {
+                        Settings.shared.keySyncInterval = $0
+                        KeySyncService.shared.restart()
+                    }
+                )) {
+                    Text("30 сек").tag(30.0)
+                    Text("1 мин").tag(60.0)
+                    Text("5 мин").tag(300.0)
+                    Text("10 мин").tag(600.0)
+                }
+                .labelsHidden()
+                .frame(width: 120)
+                Text("(обновление ключей для Mail)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
         .padding(16)

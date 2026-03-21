@@ -18,9 +18,16 @@ class ComposeSessionHandler: NSObject, MEComposeSessionHandler {
     func viewController(for session: MEComposeSession) -> MEExtensionViewController {
         let vc = ComposeViewController()
 
-        // Обновляем статус
         let sender = session.mailMessage.fromAddress.addressString ?? session.mailMessage.fromAddress.rawString
+        NSLog("[FreeGPGMail] viewController(for:) sender=%@", sender)
+
+        // KeyCache в sandbox будет читать из файла, не вызывая gpg
         let signingKey = KeyCache.shared.findSigningKey(for: sender)
+        NSLog("[FreeGPGMail] signingKey=%@, secretKeys=%d, publicKeys=%d",
+              signingKey?.fingerprint ?? "nil",
+              KeyCache.shared.secretKeysCount,
+              KeyCache.shared.publicKeysCount)
+
         let allRecipients = session.mailMessage.toAddresses + session.mailMessage.ccAddresses + session.mailMessage.bccAddresses
         let canEncrypt = signingKey != nil && !allRecipients.isEmpty && allRecipients.allSatisfy {
             let email = $0.addressString ?? $0.rawString
@@ -64,6 +71,7 @@ class ComposeSessionHandler: NSObject, MEComposeSessionHandler {
 
     /// Возвращает дополнительные заголовки для сообщения
     func additionalHeaders(for session: MEComposeSession) -> [String: [String]] {
+        // В sandbox нельзя вызывать gpg — Autocrypt заголовки добавятся на этапе encode()
         return [
             "x-pgp-agent": ["FreeGPGMail/1.0"],
         ]
@@ -71,26 +79,33 @@ class ComposeSessionHandler: NSObject, MEComposeSessionHandler {
 
     /// Проверяет, допустимо ли отправить сообщение
     func allowMessageSendForSession(_ session: MEComposeSession, completion: @escaping (Error?) -> Void) {
-        // Проверяем что gpg доступен если пользователь хочет подписать/зашифровать
-        if session.composeContext.shouldSign || session.composeContext.shouldEncrypt {
-            guard GPGHelper.isGPGInstalled() else {
+        // В sandbox не вызываем gpg — проверяем только наличие кэшированных ключей
+        if session.composeContext.shouldSign {
+            let sender = session.mailMessage.fromAddress.addressString ?? session.mailMessage.fromAddress.rawString
+            let signingKey = KeyCache.shared.findSigningKey(for: sender)
+            if signingKey == nil {
                 let error = NSError(
                     domain: MEComposeSessionErrorDomain,
                     code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "GPG не установлен. Установите: brew install gnupg"]
+                    userInfo: [NSLocalizedDescriptionKey: "Не найден секретный ключ для подписи.\nОтправитель: \(sender)\nОткройте FreeGPGMail.app для обновления ключей."]
                 )
                 completion(error)
                 return
             }
         }
 
-        if session.composeContext.shouldSign {
-            let sender = session.mailMessage.fromAddress.addressString ?? session.mailMessage.fromAddress.rawString
-            guard KeyCache.shared.findSigningKey(for: sender) != nil else {
+        if session.composeContext.shouldEncrypt {
+            let allRecipients = session.mailMessage.toAddresses + session.mailMessage.ccAddresses + session.mailMessage.bccAddresses
+            let missingKeys = allRecipients.filter { addr in
+                let email = addr.addressString ?? addr.rawString
+                return KeyCache.shared.findPublicKey(for: email) == nil
+            }
+            if !missingKeys.isEmpty {
+                let emails = missingKeys.map { $0.addressString ?? $0.rawString }.joined(separator: ", ")
                 let error = NSError(
                     domain: MEComposeSessionErrorDomain,
                     code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "Не найден секретный ключ для \(sender)"]
+                    userInfo: [NSLocalizedDescriptionKey: "Нет GPG-ключей для шифрования.\nПолучатели без ключей: \(emails)"]
                 )
                 completion(error)
                 return

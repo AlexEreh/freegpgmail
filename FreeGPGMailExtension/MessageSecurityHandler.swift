@@ -16,6 +16,14 @@ class MessageSecurityHandler: NSObject, MEMessageSecurityHandler {
 
         let contentType = extractContentType(from: rawString)
 
+        // Обработка Autocrypt заголовков (импорт ключей из входящих)
+        if let headerEnd = rawString.range(of: "\r\n\r\n") ?? rawString.range(of: "\n\n") {
+            let headers = String(rawString[rawString.startIndex..<headerEnd.lowerBound])
+            if headers.lowercased().contains("autocrypt:") {
+                _ = AutocryptHelper.processIncoming(rawHeaders: headers)
+            }
+        }
+
         switch MIMEHelper.detectPGPMIMEType(contentType: contentType) {
         case .encrypted:
             return handleEncryptedMessage(data: data, contentType: contentType)
@@ -68,11 +76,10 @@ class MessageSecurityHandler: NSObject, MEMessageSecurityHandler {
         let sender = message.fromAddress.addressString ?? message.fromAddress.rawString
         let settings = Settings.shared
 
-        // Учитываем настройки автоподписи/автошифрования
         let shouldSign = composeContext.shouldSign || settings.autoSign
         let shouldEncrypt = composeContext.shouldEncrypt || settings.autoEncrypt
 
-        Log.security.info("Encoding message: sign=\(shouldSign), encrypt=\(shouldEncrypt)")
+        NSLog("[FreeGPGMail] encode: sign=%d, encrypt=%d, sender=%@", shouldSign ? 1 : 0, shouldEncrypt ? 1 : 0, sender)
 
         if !shouldSign && !shouldEncrypt {
             completionHandler(MEMessageEncodingResult(encodedMessage: nil, signingError: nil, encryptionError: nil))
@@ -80,7 +87,6 @@ class MessageSecurityHandler: NSObject, MEMessageSecurityHandler {
         }
 
         guard let rawData = message.rawData else {
-            Log.security.error("Cannot get raw message data")
             completionHandler(MEMessageEncodingResult(
                 encodedMessage: nil,
                 signingError: shouldSign ? GPGMailError.signingFailed : nil,
@@ -97,38 +103,49 @@ class MessageSecurityHandler: NSObject, MEMessageSecurityHandler {
             signingEmail = sender
         }
 
-        if shouldEncrypt {
+        // Определяем операцию
+        let operation: String
+        var recipients: [String]?
+
+        if shouldEncrypt && shouldSign {
+            operation = "sign+encrypt"
             let allRecipients = message.toAddresses + message.ccAddresses + message.bccAddresses
-            let recipientEmails = allRecipients.map { $0.addressString ?? $0.rawString }
+            recipients = allRecipients.map { $0.addressString ?? $0.rawString }
+        } else if shouldEncrypt {
+            operation = "encrypt"
+            let allRecipients = message.toAddresses + message.ccAddresses + message.bccAddresses
+            recipients = allRecipients.map { $0.addressString ?? $0.rawString }
+        } else {
+            operation = "sign"
+        }
 
-            guard let encrypted = GPGHelper.encrypt(
-                data: rawData,
-                recipients: recipientEmails,
-                sign: shouldSign ? signingEmail : nil
-            ) else {
-                completionHandler(MEMessageEncodingResult(
-                    encodedMessage: nil, signingError: nil, encryptionError: GPGMailError.encryptionFailed
-                ))
-                return
-            }
+        // Отправляем запрос через IPC к основному приложению
+        NSLog("[FreeGPGMail] encode: sending IPC request (%@)", operation)
+        guard let response = CryptoIPC.sendRequest(
+            operation: operation,
+            data: rawData,
+            signer: shouldSign ? signingEmail : nil,
+            recipients: recipients
+        ) else {
+            let errorMsg = "FreeGPGMail.app не отвечает. Убедитесь что приложение запущено."
+            completionHandler(MEMessageEncodingResult(
+                encodedMessage: nil,
+                signingError: shouldSign ? NSError(domain: MEComposeSessionErrorDomain, code: 2, userInfo: [NSLocalizedDescriptionKey: errorMsg]) : nil,
+                encryptionError: shouldEncrypt ? NSError(domain: MEComposeSessionErrorDomain, code: 2, userInfo: [NSLocalizedDescriptionKey: errorMsg]) : nil
+            ))
+            return
+        }
 
-            let boundary = MIMEHelper.generateBoundary()
-            let mimeData = MIMEHelper.buildEncryptedMessage(encryptedData: encrypted, boundary: boundary)
-            let encoded = MEEncodedOutgoingMessage(rawData: mimeData, isSigned: shouldSign, isEncrypted: true)
+        if response.success, let mimeData = response.data {
+            let encoded = MEEncodedOutgoingMessage(rawData: mimeData, isSigned: response.isSigned, isEncrypted: response.isEncrypted)
             completionHandler(MEMessageEncodingResult(encodedMessage: encoded, signingError: nil, encryptionError: nil))
-
-        } else if shouldSign {
-            guard let signature = GPGHelper.sign(data: rawData, signer: signingEmail) else {
-                completionHandler(MEMessageEncodingResult(
-                    encodedMessage: nil, signingError: GPGMailError.signingFailed, encryptionError: nil
-                ))
-                return
-            }
-
-            let boundary = MIMEHelper.generateBoundary()
-            let mimeData = MIMEHelper.buildSignedMessage(body: rawData, signature: signature, boundary: boundary)
-            let encoded = MEEncodedOutgoingMessage(rawData: mimeData, isSigned: true, isEncrypted: false)
-            completionHandler(MEMessageEncodingResult(encodedMessage: encoded, signingError: nil, encryptionError: nil))
+        } else {
+            let errorMsg = response.error ?? "Неизвестная ошибка"
+            completionHandler(MEMessageEncodingResult(
+                encodedMessage: nil,
+                signingError: shouldSign ? NSError(domain: MEComposeSessionErrorDomain, code: 2, userInfo: [NSLocalizedDescriptionKey: errorMsg]) : nil,
+                encryptionError: shouldEncrypt ? NSError(domain: MEComposeSessionErrorDomain, code: 2, userInfo: [NSLocalizedDescriptionKey: errorMsg]) : nil
+            ))
         }
     }
 

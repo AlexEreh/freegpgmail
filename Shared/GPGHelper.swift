@@ -1,10 +1,67 @@
 import Foundation
+import CommonCrypto
 
 /// Информация о GPG-ключе
-struct GPGKeyInfo: Sendable {
+struct GPGKeyInfo: Sendable, Codable {
     let fingerprint: String
     let userID: String
     let email: String
+    let expirationDate: Date?
+    let creationDate: Date?
+
+    init(fingerprint: String, userID: String, email: String, expirationDate: Date? = nil, creationDate: Date? = nil) {
+        self.fingerprint = fingerprint
+        self.userID = userID
+        self.email = email
+        self.expirationDate = expirationDate
+        self.creationDate = creationDate
+    }
+
+    /// Ключ истекает в ближайшие N дней
+    func expiresWithin(days: Int) -> Bool {
+        guard let exp = expirationDate else { return false }
+        return exp.timeIntervalSinceNow < Double(days * 86400) && exp.timeIntervalSinceNow > 0
+    }
+
+    /// Ключ уже истёк
+    var isExpired: Bool {
+        guard let exp = expirationDate else { return false }
+        return exp < Date()
+    }
+}
+
+/// Кэш ключей на диске для обмена между приложением и расширением
+struct SharedKeyFile: Codable {
+    let secretKeys: [GPGKeyInfo]
+    let publicKeys: [GPGKeyInfo]
+    let timestamp: Date
+
+    static let filePath = "/tmp/freegpgmail-keycache.json"
+
+    /// Записывает ключи в файл (вызывается из основного приложения)
+    static func write(secretKeys: [GPGKeyInfo], publicKeys: [GPGKeyInfo]) {
+        let data = SharedKeyFile(secretKeys: secretKeys, publicKeys: publicKeys, timestamp: Date())
+        if let json = try? JSONEncoder().encode(data) {
+            try? json.write(to: URL(fileURLWithPath: filePath))
+            NSLog("[FreeGPGMail] SharedKeyFile: wrote %d secret, %d public keys", secretKeys.count, publicKeys.count)
+        }
+    }
+
+    /// Читает ключи из файла (вызывается из расширения)
+    static func read() -> SharedKeyFile? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)),
+              let cached = try? JSONDecoder().decode(SharedKeyFile.self, from: data) else {
+            NSLog("[FreeGPGMail] SharedKeyFile: no cache file found at %@", filePath)
+            return nil
+        }
+        // Кэш валиден 5 минут
+        if Date().timeIntervalSince(cached.timestamp) > 300 {
+            NSLog("[FreeGPGMail] SharedKeyFile: cache expired")
+            return nil
+        }
+        NSLog("[FreeGPGMail] SharedKeyFile: loaded %d secret, %d public keys", cached.secretKeys.count, cached.publicKeys.count)
+        return cached
+    }
 }
 
 /// Обёртка над CLI gpg для выполнения криптографических операций
@@ -28,16 +85,26 @@ enum GPGHelper {
     /// Находит исполняемый файл gpg
     static func gpgPath() -> String? {
         for path in gpgPaths {
+            // Resolve symlinks for sandbox compatibility
+            let resolved = (path as NSString).resolvingSymlinksInPath
+            if FileManager.default.isExecutableFile(atPath: resolved) {
+                return resolved
+            }
             if FileManager.default.isExecutableFile(atPath: path) {
                 return path
             }
         }
+        NSLog("[FreeGPGMail] gpg binary not found in: %@", gpgPaths.joined(separator: ", "))
         return nil
     }
 
     /// Находит gpgconf
     static func gpgconfPath() -> String? {
         for path in gpgconfPaths {
+            let resolved = (path as NSString).resolvingSymlinksInPath
+            if FileManager.default.isExecutableFile(atPath: resolved) {
+                return resolved
+            }
             if FileManager.default.isExecutableFile(atPath: path) {
                 return path
             }
@@ -417,6 +484,136 @@ enum GPGHelper {
     // MARK: - Delete Key
 
     /// Удаляет публичный ключ
+    // MARK: - WKD (Web Key Directory)
+
+    /// z-base-32 encoding table (RFC 6189)
+    private static let zBase32Alphabet = Array("ybndrfg8ejkmcpqxot1uwisza345h769")
+
+    /// Кодирует данные в z-base-32
+    private static func zBase32Encode(_ data: Data) -> String {
+        var result = ""
+        var buffer: UInt64 = 0
+        var bufferBits = 0
+
+        for byte in data {
+            buffer = (buffer << 8) | UInt64(byte)
+            bufferBits += 8
+            while bufferBits >= 5 {
+                bufferBits -= 5
+                let index = Int((buffer >> bufferBits) & 0x1F)
+                result.append(zBase32Alphabet[index])
+            }
+        }
+        if bufferBits > 0 {
+            let index = Int((buffer << (5 - bufferBits)) & 0x1F)
+            result.append(zBase32Alphabet[index])
+        }
+        return result
+    }
+
+    /// Ищет ключ через WKD (Web Key Directory) по email
+    /// Поддерживает direct и advanced методы (RFC draft-koch-openpgp-webkey-service)
+    static func lookupWKD(email: String) -> Data? {
+        guard let atIndex = email.lastIndex(of: "@") else { return nil }
+        let localPart = String(email[email.startIndex..<atIndex]).lowercased()
+        let domain = String(email[email.index(after: atIndex)...]).lowercased()
+
+        // SHA-1 хэш локальной части
+        let localData = Data(localPart.utf8)
+        var hash = [UInt8](repeating: 0, count: 20)
+        localData.withUnsafeBytes { ptr in
+            _ = CC_SHA1(ptr.baseAddress, CC_LONG(localData.count), &hash)
+        }
+        let encoded = zBase32Encode(Data(hash))
+
+        let encodedLocal = localPart.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? localPart
+
+        // Метод 1: Direct — https://domain/.well-known/openpgpkey/hu/{hash}?l={local}
+        let directURL = "https://\(domain)/.well-known/openpgpkey/hu/\(encoded)?l=\(encodedLocal)"
+        // Метод 2: Advanced — https://openpgpkey.domain/.well-known/openpgpkey/{domain}/hu/{hash}?l={local}
+        let advancedURL = "https://openpgpkey.\(domain)/.well-known/openpgpkey/\(domain)/hu/\(encoded)?l=\(encodedLocal)"
+
+        Log.keys.info("WKD lookup for \(email, privacy: .public)")
+
+        // Пробуем advanced, потом direct
+        for urlStr in [advancedURL, directURL] {
+            guard let url = URL(string: urlStr) else { continue }
+
+            let semaphore = DispatchSemaphore(value: 0)
+            var resultData: Data?
+
+            var request = URLRequest(url: url, timeoutInterval: 10)
+            request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
+
+            let task = URLSession.shared.dataTask(with: request) { data, response, error in
+                if let httpResponse = response as? HTTPURLResponse,
+                   httpResponse.statusCode == 200,
+                   let data = data, !data.isEmpty {
+                    resultData = data
+                    Log.keys.info("WKD: found key at \(urlStr, privacy: .public)")
+                }
+                semaphore.signal()
+            }
+            task.resume()
+            _ = semaphore.wait(timeout: .now() + 15)
+
+            if let data = resultData {
+                return data
+            }
+        }
+
+        Log.keys.debug("WKD: no key found for \(email, privacy: .public)")
+        return nil
+    }
+
+    /// Ищет и импортирует ключ через WKD
+    static func importFromWKD(email: String) -> Bool {
+        guard let keyData = lookupWKD(email: email) else { return false }
+        Log.keys.info("WKD: importing key for \(email, privacy: .public)")
+        return importKey(data: keyData)
+    }
+
+    // MARK: - Key Generation
+
+    /// Генерирует новый GPG-ключ
+    static func generateKey(name: String, email: String, algorithm: String = "ed25519", expiry: String = "2y", passphrase: String = "") -> Bool {
+        Log.keys.info("Generating key for \(email, privacy: .public)")
+
+        var args = [
+            "--batch", "--yes", "--quick-generate-key",
+            "\(name) <\(email)>",
+            algorithm,
+            "default",
+            expiry,
+        ]
+
+        if passphrase.isEmpty {
+            args.insert(contentsOf: ["--passphrase", "", "--pinentry-mode", "loopback"], at: 1)
+        }
+
+        let (exitCode, _, stderr) = runFull(args: args)
+        if exitCode == 0 {
+            KeyCache.shared.invalidateAll()
+            Log.keys.info("Key generated for \(email, privacy: .public)")
+        } else {
+            Log.keys.error("Key generation failed: \(stderr ?? "unknown error")")
+        }
+        return exitCode == 0
+    }
+
+    // MARK: - QR Code
+
+    /// Экспортирует минимальный публичный ключ для QR-кода
+    static func exportMinimalKey(fingerprint: String) -> String? {
+        return run([
+            "--armor", "--export",
+            "--export-options", "export-minimal",
+            fingerprint,
+        ])
+    }
+
+    // MARK: - Key Deletion
+
     static func deletePublicKey(fingerprint: String) -> Bool {
         Log.keys.info("Deleting public key \(fingerprint.suffix(8), privacy: .public)")
         let (exitCode, _, _) = runFull(args: [
@@ -432,7 +629,7 @@ enum GPGHelper {
 
     private static func run(_ args: [String]) -> String? {
         guard let path = gpgPath() else {
-            Log.gpg.error("gpg binary not found")
+            NSLog("[FreeGPGMail] gpg binary not found")
             return nil
         }
 
@@ -442,16 +639,22 @@ enum GPGHelper {
         process.environment = gpgEnvironment()
 
         let pipe = Pipe()
+        let errPipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = Pipe()
+        process.standardError = errPipe
 
         do {
             try process.run()
             process.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            if process.terminationStatus != 0 {
+                let errStr = String(data: errData, encoding: .utf8) ?? ""
+                NSLog("[FreeGPGMail] gpg failed (status %d): %@", process.terminationStatus, errStr)
+            }
             return String(data: data, encoding: .utf8)
         } catch {
-            Log.gpg.error("Failed to run gpg: \(error.localizedDescription)")
+            NSLog("[FreeGPGMail] Failed to run gpg: %@", error.localizedDescription)
             return nil
         }
     }
@@ -523,20 +726,40 @@ enum GPGHelper {
         }
     }
 
+    /// Real user home directory (not sandbox container)
+    static let realHomeDirectory: String = {
+        // In sandbox, NSHomeDirectory() and getpwuid both return the container path.
+        // We detect this and strip the container suffix to get the real home.
+        let containerMarker = "/Library/Containers/"
+        let home = NSHomeDirectory()
+        if let range = home.range(of: containerMarker) {
+            // e.g. /Users/alexereh/Library/Containers/com.xxx/Data → /Users/alexereh
+            return String(home[home.startIndex..<range.lowerBound])
+        }
+        if let pw = getpwuid(getuid()) {
+            return String(cString: pw.pointee.pw_dir)
+        }
+        return home
+    }()
+
+    /// Expose environment for debugging
+    static func debugEnvironment() -> [String: String] {
+        return gpgEnvironment()
+    }
+
     private static func gpgEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
-        // Настраиваем для работы с gpg-agent
-        if let home = env["HOME"] {
-            env["GNUPGHOME"] = env["GNUPGHOME"] ?? "\(home)/.gnupg"
-        }
+        // Use real home, not sandbox container
+        env["HOME"] = realHomeDirectory
+        // GNUPGHOME for keyring access
+        env["GNUPGHOME"] = env["GNUPGHOME"] ?? "\(realHomeDirectory)/.gnupg"
         // GPG_TTY нужен для pinentry-tty, но в non-TTY среде ставим пустое
         if env["GPG_TTY"] == nil {
             env["GPG_TTY"] = ""
         }
         // Добавляем Homebrew пути
-        if let path = env["PATH"] {
-            env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + path
-        }
+        let path = env["PATH"] ?? "/usr/bin:/bin"
+        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + path
         return env
     }
 
@@ -546,17 +769,34 @@ enum GPGHelper {
         var keys: [GPGKeyInfo] = []
         var currentFingerprint: String?
         var currentKeyValid = true
+        var currentExpiration: Date?
+        var currentCreation: Date?
 
         for line in output.components(separatedBy: "\n") {
             let fields = line.components(separatedBy: ":")
 
             // pub/sec — основная строка ключа, поле [1] = validity
-            if fields.count >= 2 && (fields[0] == "pub" || fields[0] == "sec") {
+            // поле [5] = creation date (unix timestamp), поле [6] = expiration date
+            if fields.count >= 7 && (fields[0] == "pub" || fields[0] == "sec") {
                 let validity = fields[1]
                 // r=revoked, e=expired, d=disabled, n=not valid
                 currentKeyValid = !["r", "e", "d", "n"].contains(validity)
                 if !currentKeyValid {
                     Log.keys.debug("Skipping invalid key (validity=\(validity, privacy: .public))")
+                }
+
+                // Дата создания (поле 5)
+                if fields.count > 5, let ts = TimeInterval(fields[5]), ts > 0 {
+                    currentCreation = Date(timeIntervalSince1970: ts)
+                } else {
+                    currentCreation = nil
+                }
+
+                // Дата истечения (поле 6)
+                if fields.count > 6, let ts = TimeInterval(fields[6]), ts > 0 {
+                    currentExpiration = Date(timeIntervalSince1970: ts)
+                } else {
+                    currentExpiration = nil
                 }
             }
 
@@ -576,7 +816,9 @@ enum GPGHelper {
                     keys.append(GPGKeyInfo(
                         fingerprint: fingerprint,
                         userID: uid,
-                        email: email
+                        email: email,
+                        expirationDate: currentExpiration,
+                        creationDate: currentCreation
                     ))
                 }
             }

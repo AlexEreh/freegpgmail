@@ -15,6 +15,14 @@ final class Settings: @unchecked Sendable {
         static let keyCacheTTL = "keyCacheTTL"
         static let loggingEnabled = "loggingEnabled"
         static let blockRemoteContentForEncrypted = "blockRemoteContentForEncrypted"
+        static let keySyncInterval = "keySyncInterval"
+        static let wkdAutoLookup = "wkdAutoLookup"
+        static let autocryptEnabled = "autocryptEnabled"
+        static let protectedHeaders = "protectedHeaders"
+        static let encryptDrafts = "encryptDrafts"
+        static let preferredPGPFormat = "preferredPGPFormat"
+        static let autoGenerateKey = "autoGenerateKey"
+        static let keyExpiryWarningDays = "keyExpiryWarningDays"
     }
 
     /// Режим pinentry для gpg-agent
@@ -41,6 +49,13 @@ final class Settings: @unchecked Sendable {
             Keys.autoEncrypt: true,
             Keys.pinentryMode: PinentryMode.default.rawValue,
             Keys.keyCacheTTL: 300.0,  // 5 минут
+            Keys.keySyncInterval: 60.0,  // 1 минута
+            Keys.wkdAutoLookup: true,
+            Keys.autocryptEnabled: true,
+            Keys.protectedHeaders: true,
+            Keys.encryptDrafts: false,
+            Keys.preferredPGPFormat: "pgpmime",
+            Keys.keyExpiryWarningDays: 30,
             Keys.loggingEnabled: true,
             Keys.blockRemoteContentForEncrypted: true,
         ])
@@ -93,6 +108,48 @@ final class Settings: @unchecked Sendable {
     var blockRemoteContentForEncrypted: Bool {
         get { locked { defaults.bool(forKey: Keys.blockRemoteContentForEncrypted) } }
         set { locked { defaults.set(newValue, forKey: Keys.blockRemoteContentForEncrypted) } }
+    }
+
+    /// Интервал синхронизации ключей с расширением (секунды)
+    var keySyncInterval: TimeInterval {
+        get { locked { defaults.double(forKey: Keys.keySyncInterval) } }
+        set { locked { defaults.set(newValue, forKey: Keys.keySyncInterval) } }
+    }
+
+    /// Автоматический поиск ключей через WKD
+    var wkdAutoLookup: Bool {
+        get { locked { defaults.bool(forKey: Keys.wkdAutoLookup) } }
+        set { locked { defaults.set(newValue, forKey: Keys.wkdAutoLookup) } }
+    }
+
+    /// Включить Autocrypt (обмен ключами через заголовки)
+    var autocryptEnabled: Bool {
+        get { locked { defaults.bool(forKey: Keys.autocryptEnabled) } }
+        set { locked { defaults.set(newValue, forKey: Keys.autocryptEnabled) } }
+    }
+
+    /// Шифровать тему письма (Protected Headers)
+    var protectedHeaders: Bool {
+        get { locked { defaults.bool(forKey: Keys.protectedHeaders) } }
+        set { locked { defaults.set(newValue, forKey: Keys.protectedHeaders) } }
+    }
+
+    /// Шифровать черновики
+    var encryptDrafts: Bool {
+        get { locked { defaults.bool(forKey: Keys.encryptDrafts) } }
+        set { locked { defaults.set(newValue, forKey: Keys.encryptDrafts) } }
+    }
+
+    /// Формат PGP: pgpmime или inline
+    var preferredPGPFormat: String {
+        get { locked { defaults.string(forKey: Keys.preferredPGPFormat) ?? "pgpmime" } }
+        set { locked { defaults.set(newValue, forKey: Keys.preferredPGPFormat) } }
+    }
+
+    /// За сколько дней предупреждать об истечении ключа
+    var keyExpiryWarningDays: Int {
+        get { locked { defaults.integer(forKey: Keys.keyExpiryWarningDays) } }
+        set { locked { defaults.set(newValue, forKey: Keys.keyExpiryWarningDays) } }
     }
 
     /// Email ключа по умолчанию (вычисляется из fingerprint)

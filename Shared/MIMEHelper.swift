@@ -69,6 +69,26 @@ enum MIMEHelper {
         return result
     }
 
+    // MARK: - Protected Headers (Subject Encryption)
+
+    /// Оборачивает тело письма с protected headers (шифрует тему)
+    /// Добавляет внутренний MIME-слой с оригинальной темой, заменяя внешнюю на "..."
+    static func wrapWithProtectedHeaders(body: Data, subject: String) -> Data {
+        let innerBoundary = generateBoundary()
+        var result = Data()
+
+        // Inner MIME message with protected headers
+        result.append("Content-Type: multipart/mixed;\r\n protected-headers=\"v1\";\r\n boundary=\"\(innerBoundary)\"\r\n".data(using: .utf8)!)
+        result.append("Subject: \(subject)\r\n".data(using: .utf8)!)
+        result.append("\r\n".data(using: .utf8)!)
+
+        result.append("--\(innerBoundary)\r\n".data(using: .utf8)!)
+        result.append(body)
+        result.append("\r\n--\(innerBoundary)--\r\n".data(using: .utf8)!)
+
+        return result
+    }
+
     // MARK: - Inline PGP
 
     /// Оборачивает текст в inline PGP signed формат (clearsign)
@@ -318,6 +338,142 @@ enum MIMEHelper {
             return .encrypted
         }
         return .none
+    }
+
+    // MARK: - Raw Email Splitting
+
+    /// Разделяет raw email на заголовки и тело
+    /// Возвращает (headers без Content-Type, originalContentType, body)
+    static func splitRawEmail(_ data: Data) -> (headers: String, contentType: String, body: Data)? {
+        guard let raw = String(data: data, encoding: .utf8) else { return nil }
+
+        // Находим разделитель заголовков и тела
+        let separator: String
+        let sepRange: Range<String.Index>
+        if let r = raw.range(of: "\r\n\r\n") {
+            separator = "\r\n"
+            sepRange = r
+        } else if let r = raw.range(of: "\n\n") {
+            separator = "\n"
+            sepRange = r
+        } else {
+            return nil
+        }
+
+        let headerSection = String(raw[raw.startIndex..<sepRange.lowerBound])
+        let bodySection = raw[sepRange.upperBound...]
+
+        // Извлекаем Content-Type (с учётом continuation lines)
+        var contentType = ""
+        var otherHeaders: [String] = []
+        var lines = headerSection.components(separatedBy: separator)
+        var i = 0
+        while i < lines.count {
+            let line = lines[i]
+            if line.lowercased().hasPrefix("content-type:") {
+                contentType = String(line.dropFirst("content-type:".count)).trimmingCharacters(in: .whitespaces)
+                // Собираем continuation lines
+                while i + 1 < lines.count {
+                    let next = lines[i + 1]
+                    if next.hasPrefix(" ") || next.hasPrefix("\t") {
+                        contentType += " " + next.trimmingCharacters(in: .whitespaces)
+                        i += 1
+                    } else {
+                        break
+                    }
+                }
+            } else if line.lowercased().hasPrefix("content-transfer-encoding:") {
+                // Пропускаем — будет заменён
+            } else if line.lowercased().hasPrefix("mime-version:") {
+                // Пропускаем — добавим свой
+            } else {
+                otherHeaders.append(line)
+            }
+            i += 1
+        }
+
+        if contentType.isEmpty {
+            contentType = "text/plain; charset=utf-8"
+        }
+
+        let headersStr = otherHeaders.joined(separator: separator)
+        let bodyData = bodySection.data(using: .utf8) ?? Data()
+
+        return (headersStr, contentType, bodyData)
+    }
+
+    /// Строит полный PGP/MIME signed email из raw email data
+    static func buildSignedEmail(rawEmail: Data, signature: Data, boundary: String) -> Data? {
+        guard let parts = splitRawEmail(rawEmail) else { return nil }
+
+        var result = Data()
+
+        // Оригинальные заголовки (From, To, Subject, etc.)
+        result.append(parts.headers.data(using: .utf8)!)
+        result.append("\r\n".data(using: .utf8)!)
+
+        // Новый Content-Type: multipart/signed
+        result.append("Content-Type: multipart/signed; micalg=pgp-sha256;\r\n protocol=\"application/pgp-signature\";\r\n boundary=\"\(boundary)\"\r\n".data(using: .utf8)!)
+        result.append("MIME-Version: 1.0\r\n".data(using: .utf8)!)
+        result.append("\r\n".data(using: .utf8)!)
+
+        // Part 1: тело с оригинальным Content-Type
+        let bodyPart = "Content-Type: \(parts.contentType)\r\nContent-Transfer-Encoding: 8bit\r\n\r\n"
+        result.append("--\(boundary)\r\n".data(using: .utf8)!)
+        result.append(bodyPart.data(using: .utf8)!)
+        result.append(parts.body)
+        result.append("\r\n".data(using: .utf8)!)
+
+        // Part 2: подпись
+        result.append("--\(boundary)\r\n".data(using: .utf8)!)
+        result.append("Content-Type: application/pgp-signature; name=\"signature.asc\"\r\n".data(using: .utf8)!)
+        result.append("Content-Description: OpenPGP digital signature\r\n".data(using: .utf8)!)
+        result.append("Content-Disposition: attachment; filename=\"signature.asc\"\r\n".data(using: .utf8)!)
+        result.append("\r\n".data(using: .utf8)!)
+        result.append(signature)
+        result.append("\r\n".data(using: .utf8)!)
+
+        // Закрытие
+        result.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        return result
+    }
+
+    /// Строит полный PGP/MIME encrypted email из raw email data
+    static func buildEncryptedEmail(rawEmail: Data, encryptedData: Data, boundary: String) -> Data? {
+        guard let parts = splitRawEmail(rawEmail) else { return nil }
+
+        var result = Data()
+
+        // Оригинальные заголовки
+        result.append(parts.headers.data(using: .utf8)!)
+        result.append("\r\n".data(using: .utf8)!)
+
+        // Новый Content-Type: multipart/encrypted
+        result.append("Content-Type: multipart/encrypted;\r\n protocol=\"application/pgp-encrypted\";\r\n boundary=\"\(boundary)\"\r\n".data(using: .utf8)!)
+        result.append("MIME-Version: 1.0\r\n".data(using: .utf8)!)
+        result.append("\r\n".data(using: .utf8)!)
+
+        // Part 1: PGP/MIME version
+        result.append("--\(boundary)\r\n".data(using: .utf8)!)
+        result.append("Content-Type: application/pgp-encrypted\r\n".data(using: .utf8)!)
+        result.append("Content-Description: PGP/MIME version identification\r\n".data(using: .utf8)!)
+        result.append("\r\n".data(using: .utf8)!)
+        result.append("Version: 1\r\n".data(using: .utf8)!)
+        result.append("\r\n".data(using: .utf8)!)
+
+        // Part 2: Encrypted content
+        result.append("--\(boundary)\r\n".data(using: .utf8)!)
+        result.append("Content-Type: application/octet-stream; name=\"encrypted.asc\"\r\n".data(using: .utf8)!)
+        result.append("Content-Description: OpenPGP encrypted message\r\n".data(using: .utf8)!)
+        result.append("Content-Disposition: inline; filename=\"encrypted.asc\"\r\n".data(using: .utf8)!)
+        result.append("\r\n".data(using: .utf8)!)
+        result.append(encryptedData)
+        result.append("\r\n".data(using: .utf8)!)
+
+        result.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        return result
     }
 
     // MARK: - Header Parsing Helpers
