@@ -10,17 +10,34 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![macOS 12+](https://img.shields.io/badge/macOS-12%2B-brightgreen.svg)](https://developer.apple.com/macos/)
 [![Swift 5.9](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org)
+[![GitHub release](https://img.shields.io/github/v/release/alexereh/freegpgmail)](https://github.com/alexereh/freegpgmail/releases)
+[![GitHub downloads](https://img.shields.io/github/downloads/alexereh/freegpgmail/total)](https://github.com/alexereh/freegpgmail/releases)
 
 <img src="FreeGPGMail/Assets.xcassets/AppIcon.appiconset/icon_128x128.png" width="128" alt="FreeGPGMail Icon">
 
-A free, open-source alternative to GPGMail (GPG Suite).
+A free, open-source alternative to [GPGMail](https://gpgtools.org/) (GPG Suite).<br>
 Sign, encrypt, decrypt, and verify PGP emails directly in Apple Mail.
 
-[Installation](#installation) · [Features](#features) · [Building](#building-from-source) · [Contributing](#contributing)
+[Installation](#installation) · [Features](#features) · [Building](#building-from-source) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
 ---
+
+## Screenshots
+
+<details>
+<summary>Click to expand</summary>
+
+| Compose window | Key management |
+|:-:|:-:|
+| Compose with sign/encrypt toggles and key selector | Import, export, search keyservers |
+
+| Address annotations | Settings |
+|:-:|:-:|
+| Green = key found, Yellow = no key | Auto-sign, auto-encrypt, key cache |
+
+</details>
 
 ## Features
 
@@ -59,7 +76,7 @@ cd freegpgmail
 make install
 ```
 
-This builds the app and copies it to `/Applications/FreeGPGMail.app`, registers the extension, and opens the app.
+This builds the app, copies it to `/Applications/`, registers the extension, and launches the app.
 
 ### Building from Source
 
@@ -79,11 +96,11 @@ make open
 1. **Launch FreeGPGMail.app** — it runs in the menu bar and syncs GPG keys for the Mail extension
 2. **Open Mail** — you'll see the FreeGPGMail icon in the compose toolbar
 3. **Click the extension icon** to toggle signing/encryption and select a key
-4. **Recipients** are annotated with key status (green checkmark = key found, yellow warning = no key)
+4. **Recipients** are annotated with key status (green = key found, yellow = no key)
 
 ### Key Management
 
-Open FreeGPGMail.app → **Keys** tab to:
+Open FreeGPGMail.app → **Keys** tab:
 - Search and import keys from keyservers
 - Import keys from clipboard, file, or text
 - Export public keys
@@ -92,7 +109,7 @@ Open FreeGPGMail.app → **Keys** tab to:
 
 ### Settings
 
-Open FreeGPGMail.app → **Settings** tab to configure:
+Open FreeGPGMail.app → **Settings** tab:
 - Auto-sign / auto-encrypt defaults
 - Default signing key
 - Pinentry mode
@@ -116,49 +133,51 @@ The extension runs in Apple's sandbox and cannot call GPG directly. Instead:
 - The **main app** runs GPG, caches keys to a shared file, and processes crypto operations via file-based IPC
 - The **extension** reads cached keys and sends sign/encrypt requests to the main app
 
+## Security
+
+This project takes security seriously. See [SECURITY.md](SECURITY.md) for our vulnerability disclosure policy.
+
+All releases include [SLSA Level 3](https://slsa.dev) provenance attestations. Verify with:
+
+```bash
+slsa-verifier verify-artifact FreeGPGMail-v1.0.0.dmg \
+  --provenance-path multiple.intoto.jsonl \
+  --source-uri github.com/alexereh/freegpgmail
+```
+
 ## Development
 
 ```bash
-# Generate Xcode project
-make generate
+# Setup
+brew install xcodegen gnupg swiftlint lefthook
+lefthook install
 
-# Build debug
+# Build
 make build
 
-# Build release
-make release
-
-# Run linter
+# Lint
 make lint
 
-# Run all checks (lint + build)
+# All checks
 make check
 
-# Clean
-make clean
+# Install locally
+make install
 ```
 
-### Project Structure
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full development guide.
 
-| Directory | Description |
-|-----------|-------------|
-| `FreeGPGMail/` | Main app (SwiftUI, AppDelegate, key management UI) |
-| `FreeGPGMailExtension/` | Mail extension (MailKit handlers, compose/security VCs) |
-| `Shared/` | Shared code (GPGHelper, MIMEHelper, KeyCache, Settings, CryptoIPC) |
+## Star History
 
-## Contributing
+<div align="center">
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Commit your changes
-4. Push to the branch (`git push origin feature/my-feature`)
-5. Open a Pull Request
+[![Star History Chart](https://api.star-history.com/svg?repos=alexereh/freegpgmail&type=Date)](https://star-history.com/#alexereh/freegpgmail&Date)
 
-Please ensure `make check` passes before submitting.
+</div>
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
 
 ## Acknowledgments
 

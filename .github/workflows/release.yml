@@ -59,11 +59,15 @@ jobs:
           cd build/Build/Products/Release
           zip -r "../../../../FreeGPGMail-${{ github.ref_name }}.zip" FreeGPGMail.app
 
+      # SLSA L3: генерируем SHA-256 хеши артефактов для provenance attestation
+      # shasum (macOS) вместо sha256sum (Linux), base64 без -w0 (macOS)
       - name: Generate SLSA subject hashes
         id: hash
         run: |
           set -euo pipefail
-          HASHES=$(sha256sum FreeGPGMail-*.dmg FreeGPGMail-*.zip | base64 -w0)
+          # shasum -a 256 выдаёт формат "hash  filename" — совместим с sha256sum
+          # base64 | tr -d '\n' — убираем возможные переносы строк (macOS base64 wraps at 76 chars)
+          HASHES=$(shasum -a 256 FreeGPGMail-*.dmg FreeGPGMail-*.zip | base64 | tr -d '\n')
           echo "hashes=$HASHES" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifacts
@@ -75,6 +79,20 @@ jobs:
             FreeGPGMail-*.zip
           retention-days: 5
 
+  # SLSA L3: provenance генерируется ИЗОЛИРОВАННЫМ reusable workflow от slsa-framework
+  # Этот workflow запускается в ОТДЕЛЬНОМ runner'е, к которому у нас НЕТ доступа.
+  # Он подписывает provenance через Sigstore (OIDC token от GitHub),
+  # что делает подделку provenance невозможной — даже для владельца репозитория.
+  #
+  # Что это доказывает (SLSA L3):
+  #   1. Build-as-code: определение сборки в VCS (этот workflow)
+  #   2. Ephemeral isolated: GitHub-hosted runner, одноразовый
+  #   3. Non-falsifiable provenance: генерируется trusted builder'ом (slsa-github-generator),
+  #      подписывается через Sigstore OIDC, владелец репо НЕ МОЖЕТ подменить
+  #
+  # Верификация: slsa-verifier verify-artifact FreeGPGMail-v*.dmg \
+  #   --provenance-path multiple.intoto.jsonl \
+  #   --source-uri github.com/alexereh/freegpgmail
   provenance:
     name: SLSA Provenance
     needs: build

@@ -1,0 +1,97 @@
+name: Bug Report
+description: Report a bug in FreeGPGMail
+labels: ["bug"]
+body:
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I have searched existing issues and this bug has not been reported
+          required: true
+        - label: I have the latest version of FreeGPGMail installed
+          required: true
+        - label: FreeGPGMail.app is running (check menu bar icon)
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: Clear and concise description of the bug
+      placeholder: When I try to send a signed email, the signature is not attached...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Step-by-step instructions to reproduce the issue
+      placeholder: |
+        1. Open Mail and compose a new message
+        2. Click the FreeGPGMail extension icon
+        3. Enable "Sign"
+        4. Click Send
+        5. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: The email should be sent with a PGP/MIME signature attached
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: An error dialog appears with "FreeGPGMail" and no details
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: "e.g. macOS 15.3 (Sequoia)"
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: FreeGPGMail version
+      placeholder: "e.g. 1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: gpg-version
+    attributes:
+      label: GPG version (run `gpg --version`)
+      placeholder: "e.g. gpg (GnuPG) 2.4.5"
+
+  - type: dropdown
+    id: key-type
+    attributes:
+      label: GPG key algorithm
+      options:
+        - RSA
+        - Ed25519 / Curve25519
+        - DSA
+        - Other / Don't know
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Diagnostics / Logs
+      description: |
+        Open FreeGPGMail.app → Diagnostics tab → "Export Diagnostics".
+        Paste the contents here, or attach the file.
+      render: text
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: If applicable, add screenshots to help explain the problem

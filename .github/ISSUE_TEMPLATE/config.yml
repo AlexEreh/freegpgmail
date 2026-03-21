@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: GPG / GnuPG issues
+    url: https://dev.gnupg.org/
+    about: Issues with GPG itself (not FreeGPGMail) should be reported to GnuPG
+  - name: Discussions
+    url: https://github.com/alexereh/freegpgmail/discussions
+    about: Ask questions and discuss ideas
