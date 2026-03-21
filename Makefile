@@ -1,35 +1,88 @@
-.PHONY: generate build clean install run
+.PHONY: generate build release clean open run install uninstall lint check
 
-# Генерация Xcode-проекта через xcodegen
+APP_NAME = FreeGPGMail
+APP_BUNDLE = $(APP_NAME).app
+INSTALL_DIR = /Applications
+EXTENSION_ID = com.freegpgmail.app.mail-extension
+BUILD_DIR = build
+DERIVED_DATA = $(BUILD_DIR)
+CONFIGURATION_DEBUG = Debug
+CONFIGURATION_RELEASE = Release
+
+# --- Build ---
+
+# Generate Xcode project via xcodegen
 generate:
-	@command -v xcodegen >/dev/null 2>&1 || { echo "Установите xcodegen: brew install xcodegen"; exit 1; }
+	@command -v xcodegen >/dev/null 2>&1 || { echo "Install xcodegen: brew install xcodegen"; exit 1; }
 	xcodegen generate
 
-# Сборка проекта
+# Debug build
 build: generate
-	xcodebuild -project FreeGPGMail.xcodeproj \
-		-scheme FreeGPGMail \
-		-configuration Debug \
-		-derivedDataPath build \
+	xcodebuild -project $(APP_NAME).xcodeproj \
+		-scheme $(APP_NAME) \
+		-configuration $(CONFIGURATION_DEBUG) \
+		-derivedDataPath $(DERIVED_DATA) \
 		build
 
-# Сборка Release
+# Release build
 release: generate
-	xcodebuild -project FreeGPGMail.xcodeproj \
-		-scheme FreeGPGMail \
-		-configuration Release \
-		-derivedDataPath build \
+	xcodebuild -project $(APP_NAME).xcodeproj \
+		-scheme $(APP_NAME) \
+		-configuration $(CONFIGURATION_RELEASE) \
+		-derivedDataPath $(DERIVED_DATA) \
 		build
 
-# Очистка
-clean:
-	rm -rf build
-	rm -rf FreeGPGMail.xcodeproj
+# --- Install / Uninstall ---
 
-# Открыть в Xcode
+# Build, install to /Applications, register extension, launch app
+install: build
+	@echo "Installing $(APP_BUNDLE) to $(INSTALL_DIR)..."
+	@rm -rf "$(INSTALL_DIR)/$(APP_BUNDLE)"
+	@cp -R "$(DERIVED_DATA)/Build/Products/$(CONFIGURATION_DEBUG)/$(APP_BUNDLE)" "$(INSTALL_DIR)/$(APP_BUNDLE)"
+	@echo "Registering extension..."
+	@pluginkit -e use -i $(EXTENSION_ID) 2>/dev/null || true
+	@echo "Launching $(APP_NAME)..."
+	@open "$(INSTALL_DIR)/$(APP_BUNDLE)"
+	@echo ""
+	@echo "Done! Enable the extension in System Settings -> Extensions -> Mail"
+	@echo "Then restart Mail."
+
+# Uninstall from /Applications
+uninstall:
+	@echo "Uninstalling $(APP_BUNDLE)..."
+	@pkill -f $(APP_NAME) 2>/dev/null || true
+	@rm -rf "$(INSTALL_DIR)/$(APP_BUNDLE)"
+	@echo "Done."
+
+# --- Lint ---
+
+# Run SwiftLint
+lint:
+	@command -v swiftlint >/dev/null 2>&1 || { echo "Install swiftlint: brew install swiftlint"; exit 1; }
+	swiftlint lint --config .swiftlint.yml
+
+# Run SwiftLint with auto-fix
+lint-fix:
+	@command -v swiftlint >/dev/null 2>&1 || { echo "Install swiftlint: brew install swiftlint"; exit 1; }
+	swiftlint lint --fix --config .swiftlint.yml
+
+# --- Checks ---
+
+# Run all checks (lint + build)
+check: lint build
+	@echo "All checks passed."
+
+# --- Utilities ---
+
+# Open in Xcode
 open: generate
-	open FreeGPGMail.xcodeproj
+	open $(APP_NAME).xcodeproj
 
-# Запуск приложения
+# Build and run
 run: build
-	open build/Build/Products/Debug/FreeGPGMail.app
+	open "$(DERIVED_DATA)/Build/Products/$(CONFIGURATION_DEBUG)/$(APP_BUNDLE)"
+
+# Clean build artifacts
+clean:
+	rm -rf $(BUILD_DIR)
+	rm -rf $(APP_NAME).xcodeproj

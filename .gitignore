@@ -10,3 +10,11 @@ FreeGPGMail.xcodeproj/
 .DS_Store
 *.swp
 *~
+
+## Artifacts
+*.dmg
+*.zip
+dmg-staging/
+
+## Claude
+.claude/

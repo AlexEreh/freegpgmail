@@ -1,0 +1,44 @@
+included:
+  - FreeGPGMail
+  - FreeGPGMailExtension
+  - Shared
+
+excluded:
+  - build
+  - DerivedData
+  - FreeGPGMail.xcodeproj
+
+disabled_rules:
+  - trailing_whitespace
+  - line_length
+  - type_body_length
+  - file_length
+  - function_body_length
+  - cyclomatic_complexity
+  - force_cast
+  - force_try
+  - force_unwrapping
+  - identifier_name
+  - nesting
+  - large_tuple
+  - todo
+  - trailing_comma
+  - non_optional_string_data_conversion
+  - orphaned_doc_comment
+  - unused_closure_parameter
+
+opt_in_rules:
+  - empty_count
+  - closure_spacing
+  - contains_over_first_not_nil
+  - discouraged_optional_boolean
+  - empty_string
+  - fatal_error_message
+  - first_where
+  - joined_default_parameter
+  - last_where
+  - modifier_order
+  - redundant_nil_coalescing
+  - sorted_first_last
+
+reporter: xcode
