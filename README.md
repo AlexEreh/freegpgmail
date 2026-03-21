@@ -169,11 +169,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full development guide.
 
 ## Star History
 
-<div align="center">
-
-[![Star History Chart](https://api.star-history.com/svg?repos=alexereh/freegpgmail&type=Date)](https://star-history.com/#alexereh/freegpgmail&Date)
-
-</div>
+> Star history graph will appear once the repository is public and has stars.
+>
+> [![Star History Chart](https://api.star-history.com/svg?repos=alexereh/freegpgmail&type=Date)](https://star-history.com/#alexereh/freegpgmail&Date)
 
 ## License
 
