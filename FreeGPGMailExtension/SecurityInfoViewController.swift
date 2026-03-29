@@ -6,8 +6,13 @@ class SecurityInfoViewController: MEExtensionViewController {
 
     private var context: SecurityContext?
 
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        self.preferredContentSize = NSSize(width: 380, height: 300)
+    }
+
     override func loadView() {
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 120))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 380, height: 300))
         self.view = container
 
         guard let ctx = context else {
@@ -18,7 +23,7 @@ class SecurityInfoViewController: MEExtensionViewController {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
+        stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(stack)
 
@@ -29,59 +34,175 @@ class SecurityInfoViewController: MEExtensionViewController {
             stack.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -12),
         ])
 
-        // Encryption status
+        // === Заголовок ===
+        let title = NSTextField(labelWithString: "Информация о безопасности PGP")
+        title.font = .boldSystemFont(ofSize: 14)
+        title.textColor = .labelColor
+        stack.addArrangedSubview(title)
+        stack.addArrangedSubview(makeSeparator())
+
+        // === Шифрование ===
         if ctx.isEncrypted {
-            let row = makeRow(
-                icon: "lock.fill",
-                text: "Зашифровано",
-                color: .systemGreen
-            )
-            stack.addArrangedSubview(row)
+            stack.addArrangedSubview(makeRow(
+                icon: "lock.fill", text: "Зашифровано", color: .systemGreen
+            ))
         }
 
-        // Signature status
+        // === Статус подписи ===
         switch ctx.signatureStatus {
-        case .valid(let email, let trust):
-            let trustLevel = GPGHelper.VerifyResult.TrustLevel(rawValue: trust) ?? .unknown
+        case .valid(let email, _):
+            let trustLevel = ctx.trustLevel.flatMap { GPGHelper.VerifyResult.TrustLevel(rawValue: $0) } ?? .unknown
             let trustText = trustDescription(trustLevel)
-            let row = makeRow(
+            let trustColor = trustColor(trustLevel)
+
+            stack.addArrangedSubview(makeRow(
                 icon: "checkmark.shield.fill",
-                text: "Подписано: \(email)\(trustText)",
+                text: "Подпись верна",
                 color: .systemGreen
-            )
-            stack.addArrangedSubview(row)
+            ))
+            stack.addArrangedSubview(makeRow(
+                icon: "person.fill",
+                text: "Подписант: \(email)",
+                color: .labelColor
+            ))
+            if !trustText.isEmpty {
+                stack.addArrangedSubview(makeRow(
+                    icon: "person.badge.shield.checkmark.fill",
+                    text: "Уровень доверия: \(trustText)",
+                    color: trustColor
+                ))
+            }
 
         case .invalid(let email):
-            let text = email.map { "Недействительная подпись: \($0)" } ?? "Недействительная подпись"
-            let row = makeRow(
+            stack.addArrangedSubview(makeRow(
                 icon: "xmark.shield.fill",
-                text: text,
+                text: "Подпись недействительна",
                 color: .systemRed
-            )
-            stack.addArrangedSubview(row)
+            ))
+            if let email = email, !email.isEmpty {
+                stack.addArrangedSubview(makeRow(
+                    icon: "person.fill",
+                    text: "Подписант: \(email)",
+                    color: .labelColor
+                ))
+            }
+            let trustLevel = ctx.trustLevel.flatMap { GPGHelper.VerifyResult.TrustLevel(rawValue: $0) } ?? .unknown
+            let trustText = trustDescription(trustLevel)
+            if !trustText.isEmpty {
+                stack.addArrangedSubview(makeRow(
+                    icon: "person.badge.shield.checkmark.fill",
+                    text: "Уровень доверия: \(trustText)",
+                    color: trustColor(trustLevel)
+                ))
+            }
+            // Причина ошибки для невалидной подписи
+            if let detail = ctx.verificationDetail, !detail.isEmpty {
+                stack.addArrangedSubview(makeSeparator())
+                let reasonTitle = NSTextField(labelWithString: "Причина")
+                reasonTitle.font = .boldSystemFont(ofSize: 12)
+                reasonTitle.textColor = .systemRed
+                stack.addArrangedSubview(reasonTitle)
+                let reasonLabel = NSTextField(wrappingLabelWithString: detail)
+                reasonLabel.font = .systemFont(ofSize: 11)
+                reasonLabel.textColor = .secondaryLabelColor
+                reasonLabel.preferredMaxLayoutWidth = 340
+                stack.addArrangedSubview(reasonLabel)
+            }
 
         case .none:
             break
         }
 
-        // Key ID
-        if let keyID = ctx.signerKeyID {
-            let row = makeRow(
-                icon: "key.fill",
-                text: "Ключ: \(keyID)",
+        // === UserID ===
+        if let userID = ctx.signerUserID, !userID.isEmpty {
+            stack.addArrangedSubview(makeRow(
+                icon: "person.text.rectangle",
+                text: "UserID: \(userID)",
                 color: .secondaryLabelColor
-            )
-            stack.addArrangedSubview(row)
+            ))
         }
 
-        // Decryption error
+        // === Key ID ===
+        if let keyID = ctx.signerKeyID, !keyID.isEmpty {
+            stack.addArrangedSubview(makeRow(
+                icon: "key.fill",
+                text: "Key ID: \(keyID)",
+                color: .secondaryLabelColor
+            ))
+        }
+
+        // === Fingerprint ===
+        if let fp = ctx.keyFingerprint, !fp.isEmpty {
+            let formatted = formatFingerprint(fp)
+            stack.addArrangedSubview(makeRow(
+                icon: "textformat.123",
+                text: "Отпечаток: \(formatted)",
+                color: .secondaryLabelColor
+            ))
+        }
+
+        // === Даты ключа ===
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .medium
+        dateFormatter.timeStyle = .none
+        dateFormatter.locale = Locale(identifier: "ru_RU")
+
+        if let created = ctx.keyCreationDate {
+            stack.addArrangedSubview(makeRow(
+                icon: "calendar.badge.plus",
+                text: "Ключ создан: \(dateFormatter.string(from: created))",
+                color: .secondaryLabelColor
+            ))
+        }
+
+        if let expires = ctx.keyExpirationDate {
+            let isExpired = expires < Date()
+            stack.addArrangedSubview(makeRow(
+                icon: isExpired ? "calendar.badge.exclamationmark" : "calendar.badge.clock",
+                text: isExpired
+                    ? "Ключ истёк: \(dateFormatter.string(from: expires))"
+                    : "Действителен до: \(dateFormatter.string(from: expires))",
+                color: isExpired ? .systemRed : .secondaryLabelColor
+            ))
+        } else if ctx.keyFingerprint != nil {
+            stack.addArrangedSubview(makeRow(
+                icon: "calendar.badge.clock",
+                text: "Срок действия: бессрочный",
+                color: .secondaryLabelColor
+            ))
+        }
+
+        // === Ошибка расшифровки ===
         if let error = ctx.decryptionError {
-            let row = makeRow(
+            stack.addArrangedSubview(makeRow(
                 icon: "lock.slash.fill",
                 text: "Ошибка расшифровки: \(error)",
                 color: .systemRed
-            )
-            stack.addArrangedSubview(row)
+            ))
+        }
+
+        // === Web of Trust пояснение ===
+        let showWoT: Bool
+        switch ctx.signatureStatus {
+        case .valid, .invalid: showWoT = true
+        case .none: showWoT = false
+        }
+
+        if showWoT {
+            stack.addArrangedSubview(makeSeparator())
+
+            let wotTitle = NSTextField(labelWithString: "PGP Web of Trust")
+            wotTitle.font = .boldSystemFont(ofSize: 12)
+            wotTitle.textColor = .labelColor
+            stack.addArrangedSubview(wotTitle)
+
+            let trustLevel = ctx.trustLevel.flatMap { GPGHelper.VerifyResult.TrustLevel(rawValue: $0) } ?? .unknown
+            let explanation = wotExplanation(trustLevel)
+            let explanationLabel = NSTextField(wrappingLabelWithString: explanation)
+            explanationLabel.font = .systemFont(ofSize: 11)
+            explanationLabel.textColor = .secondaryLabelColor
+            explanationLabel.preferredMaxLayoutWidth = 340
+            stack.addArrangedSubview(explanationLabel)
         }
     }
 
@@ -107,6 +228,7 @@ class SecurityInfoViewController: MEExtensionViewController {
         let label = NSTextField(labelWithString: text)
         label.textColor = color
         label.font = .systemFont(ofSize: 12)
+        label.lineBreakMode = .byTruncatingTail
 
         let row = NSStackView(views: [imageView, label])
         row.orientation = .horizontal
@@ -124,16 +246,68 @@ class SecurityInfoViewController: MEExtensionViewController {
         ])
     }
 
+    private func makeSeparator() -> NSView {
+        let sep = NSBox()
+        sep.boxType = .separator
+        return sep
+    }
+
+    private func formatFingerprint(_ fp: String) -> String {
+        // Форматируем как XXXX XXXX XXXX XXXX XXXX  XXXX XXXX XXXX XXXX XXXX
+        var result = ""
+        for (i, ch) in fp.enumerated() {
+            if i > 0 && i % 4 == 0 {
+                result += i == 20 ? "  " : " "
+            }
+            result.append(ch)
+        }
+        return result
+    }
+
     private func trustDescription(_ trust: GPGHelper.VerifyResult.TrustLevel) -> String {
         switch trust {
-        case .ultimate: return " (полное доверие)"
-        case .full: return " (доверенный)"
-        case .marginal: return " (частичное доверие)"
-        case .undefined: return " (доверие не задано)"
-        case .never: return " (не доверенный!)"
-        case .expired: return " (ключ истёк!)"
+        case .ultimate: return "Полное доверие (Ultimate)"
+        case .full: return "Доверенный (Full)"
+        case .marginal: return "Частичное доверие (Marginal)"
+        case .undefined: return "Доверие не задано (Undefined)"
+        case .never: return "Не доверенный (Never)"
+        case .expired: return "Ключ истёк (Expired)"
         case .unknown: return ""
         }
+    }
+
+    private func trustColor(_ trust: GPGHelper.VerifyResult.TrustLevel) -> NSColor {
+        switch trust {
+        case .ultimate: return .systemGreen
+        case .full: return .systemGreen
+        case .marginal: return .systemYellow
+        case .undefined: return .systemOrange
+        case .never: return .systemRed
+        case .expired: return .systemRed
+        case .unknown: return .secondaryLabelColor
+        }
+    }
+
+    private func wotExplanation(_ trust: GPGHelper.VerifyResult.TrustLevel) -> String {
+        let base = "Web of Trust — это децентрализованная модель доверия PGP. Вместо центрального удостоверяющего центра (CA), пользователи сами подписывают ключи друг друга, формируя «сеть доверия»."
+        let specific: String
+        switch trust {
+        case .ultimate:
+            specific = "\n\nУровень «Ultimate» — это ваш собственный ключ. Вы полностью доверяете этому ключу, так как владеете его секретной частью."
+        case .full:
+            specific = "\n\nУровень «Full» — ключ подписан достаточным количеством доверенных ключей. GPG считает его подлинным."
+        case .marginal:
+            specific = "\n\nУровень «Marginal» — ключ подписан частично доверенными ключами. Для полного доверия нужны дополнительные подписи."
+        case .undefined:
+            specific = "\n\nУровень «Undefined» — ключ есть в связке, но его подлинность не подтверждена подписями доверенных ключей. Рекомендуется проверить отпечаток напрямую."
+        case .never:
+            specific = "\n\nУровень «Never» — ключ явно помечен как недоверенный. Подпись может быть подделана."
+        case .expired:
+            specific = "\n\nКлюч подписанта истёк. Подпись могла быть сделана до истечения срока, но рекомендуется обновить ключ."
+        case .unknown:
+            specific = "\n\nУровень доверия не определён. Ключ подписанта может отсутствовать в вашей связке."
+        }
+        return base + specific
     }
 }
 
@@ -145,6 +319,13 @@ struct SecurityContext: Codable {
     var signatureStatus: SignatureStatus = .none
     var signerKeyID: String?
     var decryptionError: String?
+    // Расширенная информация о PGP подписи
+    var keyFingerprint: String?
+    var keyCreationDate: Date?
+    var keyExpirationDate: Date?
+    var signerUserID: String?
+    var trustLevel: String?  // ultimate, full, marginal, undefined, never, expired, unknown
+    var verificationDetail: String?  // Подробная причина ошибки верификации
 
     enum SignatureStatus: Codable {
         case valid(email: String, trust: String)

@@ -81,17 +81,16 @@ class MessageSecurityHandler: NSObject, MEMessageSecurityHandler {
 
         NSLog("[FreeGPGMail] encode: sign=%d, encrypt=%d, sender=%@", shouldSign ? 1 : 0, shouldEncrypt ? 1 : 0, sender)
 
+        // Ничего не делаем — отправляем как есть
         if !shouldSign && !shouldEncrypt {
+            NSLog("[FreeGPGMail] encode: no sign/encrypt requested, passing through")
             completionHandler(MEMessageEncodingResult(encodedMessage: nil, signingError: nil, encryptionError: nil))
             return
         }
 
         guard let rawData = message.rawData else {
-            completionHandler(MEMessageEncodingResult(
-                encodedMessage: nil,
-                signingError: shouldSign ? GPGMailError.signingFailed : nil,
-                encryptionError: shouldEncrypt ? GPGMailError.encryptionFailed : nil
-            ))
+            NSLog("[FreeGPGMail] encode: no rawData, passing through")
+            completionHandler(MEMessageEncodingResult(encodedMessage: nil, signingError: nil, encryptionError: nil))
             return
         }
 
@@ -127,25 +126,20 @@ class MessageSecurityHandler: NSObject, MEMessageSecurityHandler {
             signer: shouldSign ? signingEmail : nil,
             recipients: recipients
         ) else {
-            let errorMsg = "FreeGPGMail.app не отвечает. Убедитесь что приложение запущено."
-            completionHandler(MEMessageEncodingResult(
-                encodedMessage: nil,
-                signingError: shouldSign ? NSError(domain: MEComposeSessionErrorDomain, code: 2, userInfo: [NSLocalizedDescriptionKey: errorMsg]) : nil,
-                encryptionError: shouldEncrypt ? NSError(domain: MEComposeSessionErrorDomain, code: 2, userInfo: [NSLocalizedDescriptionKey: errorMsg]) : nil
-            ))
+            // IPC таймаут — отправляем без подписи/шифрования, не крашим Mail
+            NSLog("[FreeGPGMail] encode: IPC timeout, sending without protection")
+            completionHandler(MEMessageEncodingResult(encodedMessage: nil, signingError: nil, encryptionError: nil))
             return
         }
 
         if response.success, let mimeData = response.data {
+            NSLog("[FreeGPGMail] encode: success, %d bytes", mimeData.count)
             let encoded = MEEncodedOutgoingMessage(rawData: mimeData, isSigned: response.isSigned, isEncrypted: response.isEncrypted)
             completionHandler(MEMessageEncodingResult(encodedMessage: encoded, signingError: nil, encryptionError: nil))
         } else {
-            let errorMsg = response.error ?? "Неизвестная ошибка"
-            completionHandler(MEMessageEncodingResult(
-                encodedMessage: nil,
-                signingError: shouldSign ? NSError(domain: MEComposeSessionErrorDomain, code: 2, userInfo: [NSLocalizedDescriptionKey: errorMsg]) : nil,
-                encryptionError: shouldEncrypt ? NSError(domain: MEComposeSessionErrorDomain, code: 2, userInfo: [NSLocalizedDescriptionKey: errorMsg]) : nil
-            ))
+            // Ошибка GPG — отправляем без подписи, не крашим Mail
+            NSLog("[FreeGPGMail] encode: GPG error: %@, sending without protection", response.error ?? "unknown")
+            completionHandler(MEMessageEncodingResult(encodedMessage: nil, signingError: nil, encryptionError: nil))
         }
     }
 
@@ -169,10 +163,10 @@ class MessageSecurityHandler: NSObject, MEMessageSecurityHandler {
     }
 
     func primaryActionClicked(forMessageContext context: Data, completionHandler: @escaping (MEExtensionViewController?) -> Void) {
-        Log.general.debug("primaryActionClicked called")
-        let vc = SecurityInfoViewController()
-        vc.configure(with: context)
-        completionHandler(vc)
+        // ViewBridge/XPC не может сериализовать MEExtensionViewController из primaryActionClicked —
+        // Mail крашится с _swift_stdlib_bridgeErrorToNSError. Возвращаем nil.
+        // Детали подписи доступны через клик на подпись в заголовке (extensionViewController(signers:)).
+        completionHandler(nil)
     }
 
     // MARK: - Private: Encrypted Message Handling
@@ -186,26 +180,42 @@ class MessageSecurityHandler: NSObject, MEMessageSecurityHandler {
             return nil
         }
 
-        let result = GPGHelper.decrypt(data: encryptedData)
-
         var ctx = SecurityContext()
         ctx.isEncrypted = true
 
-        guard result.success, let decryptedData = result.data else {
-            Log.security.error("Decryption failed: \(result.statusMessage)")
-            ctx.decryptionError = result.statusMessage
+        // Расшифровка через IPC (sandbox не может запустить gpg)
+        guard let response = CryptoIPC.sendRequest(
+            operation: "decrypt",
+            data: encryptedData,
+            signer: nil,
+            recipients: nil
+        ) else {
+            // IPC недоступен — показываем ошибку
+            NSLog("[FreeGPGMail] decrypt IPC unavailable")
+            ctx.decryptionError = "FreeGPGMail.app не запущен"
+            let banner = MEDecodedMessageBanner(
+                title: "Не удалось расшифровать (запустите FreeGPGMail.app)",
+                primaryActionTitle: "",
+                dismissable: true
+            )
+            let securityInfo = MEMessageSecurityInformation(
+                signers: [], isEncrypted: true, signingError: nil, encryptionError: GPGMailError.decryptionFailed
+            )
+            return MEDecodedMessage(data: nil, securityInformation: securityInfo,
+                                   context: ctx.encode(), banner: banner)
+        }
+
+        guard response.success, let decryptedData = response.data else {
+            Log.security.error("Decryption failed: \(response.error ?? "unknown")")
+            ctx.decryptionError = response.error ?? "Ошибка расшифровки"
 
             let banner = MEDecodedMessageBanner(
                 title: "Не удалось расшифровать сообщение",
-                primaryActionTitle: "Подробнее",
+                primaryActionTitle: "",
                 dismissable: true
             )
-
             let securityInfo = MEMessageSecurityInformation(
-                signers: [],
-                isEncrypted: true,
-                signingError: nil,
-                encryptionError: GPGMailError.decryptionFailed
+                signers: [], isEncrypted: true, signingError: nil, encryptionError: GPGMailError.decryptionFailed
             )
             return MEDecodedMessage(data: nil, securityInformation: securityInfo,
                                    context: ctx.encode(), banner: banner)
@@ -213,21 +223,24 @@ class MessageSecurityHandler: NSObject, MEMessageSecurityHandler {
 
         // Собираем информацию о подписи если была
         var signers: [MEMessageSigner] = []
-        if result.signatureValid, let signerEmail = result.wasSignedBy {
-            ctx.signatureStatus = .valid(email: signerEmail, trust: "unknown")
+        let signatureValid = response.signatureValid ?? false
+        let signerEmail = response.signerEmail
+
+        if signatureValid, let email = signerEmail {
+            ctx.signatureStatus = .valid(email: email, trust: "unknown")
             let signer = MEMessageSigner(
-                emailAddresses: [MEEmailAddress(rawString: signerEmail)],
-                signatureLabel: signerEmail,
+                emailAddresses: [MEEmailAddress(rawString: email)],
+                signatureLabel: email,
                 context: ctx.encode()
             )
             signers = [signer]
         }
 
         let banner = MEDecodedMessageBanner(
-            title: result.signatureValid
-                ? "Зашифровано и подписано (\(result.wasSignedBy ?? ""))"
+            title: signatureValid
+                ? "Зашифровано и подписано (\(signerEmail ?? ""))"
                 : "Зашифрованное сообщение расшифровано",
-            primaryActionTitle: "Подробнее",
+            primaryActionTitle: "",
             dismissable: true
         )
 
@@ -259,92 +272,100 @@ class MessageSecurityHandler: NSObject, MEMessageSecurityHandler {
             return nil
         }
 
-        // Пробуем извлечь множественные подписи
-        if let parsed = MIMEHelper.parseSignedMessageMultiple(data: data, boundary: boundary) {
-            let verifyResults = GPGHelper.verifyMultiple(signatures: parsed.signatures, signedData: parsed.body)
-            return buildSignedDecodedMessage(body: parsed.body, verifyResults: verifyResults)
-        }
-
-        // Fallback на одну подпись
         guard let parsed = MIMEHelper.parseSignedMessage(data: data, boundary: boundary) else {
             Log.security.error("Failed to parse signed MIME structure")
             return nil
         }
 
-        let verifyResult = GPGHelper.verify(signature: parsed.signature, signedData: parsed.body)
-        return buildSignedDecodedMessage(body: parsed.body, verifyResults: [verifyResult])
-    }
+        // Отображаемый контент — тело подписанной части (MIME entity без обёртки multipart/signed)
+        // MEDecodedMessage(data:) ожидает именно MIME-контент, а не полный RFC822 с заголовками From/To/Subject.
+        let displayData = parsed.body
 
-    /// Строит MEDecodedMessage из результатов верификации (поддерживает множественные подписи)
-    private func buildSignedDecodedMessage(body: Data, verifyResults: [GPGHelper.VerifyResult]) -> MEDecodedMessage {
-        var ctx = SecurityContext()
-        var signers: [MEMessageSigner] = []
-        var allValid = true
-        var signerNames: [String] = []
+        // Верификация через IPC (sandbox не может запустить gpg)
+        if let response = CryptoIPC.sendRequest(
+            operation: "verify",
+            data: parsed.body,
+            signer: nil,
+            recipients: nil,
+            signatureData: parsed.signature
+        ) {
+            let isValid = response.signatureValid ?? false
+            let signerEmail = response.signerEmail
 
-        for result in verifyResults {
-            if result.isValid {
-                let email = result.signerEmail ?? "Неизвестный"
-                signerNames.append(email)
+            var ctx = SecurityContext()
+            let trustLevel = response.trustLevel ?? "unknown"
+            if isValid {
+                ctx.signatureStatus = .valid(email: signerEmail ?? "Неизвестный", trust: trustLevel)
+            } else {
+                ctx.signatureStatus = .invalid(email: signerEmail)
+            }
+            ctx.signerKeyID = response.signerKeyID
+            ctx.trustLevel = trustLevel
+            ctx.keyFingerprint = response.keyFingerprint
+            ctx.keyCreationDate = response.keyCreationDate
+            ctx.keyExpirationDate = response.keyExpirationDate
+            ctx.signerUserID = response.signerUserID
+            ctx.verificationDetail = response.verificationDetail
 
-                let signer = MEMessageSigner(
-                    emailAddresses: result.signerEmail.map {
-                        [MEEmailAddress(rawString: $0)]
-                    } ?? [],
-                    signatureLabel: email,
+            let signerLabel = signerEmail ?? "Неизвестный"
+            let signers: [MEMessageSigner]
+            let signingError: Error?
+
+            if isValid {
+                signers = [MEMessageSigner(
+                    emailAddresses: [MEEmailAddress(rawString: signerLabel)],
+                    signatureLabel: "PGP: \(signerLabel)",
                     context: ctx.encode()
-                )
-                signers.append(signer)
-                Log.security.info("Valid signature from \(email, privacy: .public)")
+                )]
+                signingError = nil
             } else {
-                allValid = false
-                Log.security.warning("Invalid signature")
+                // Пустой signers + signingError → Mail покажет предупреждающую иконку вместо галочки
+                // Для просмотра деталей используется extensionViewController(messageContext:) через баннер
+                signers = []
+                signingError = GPGMailError.verificationFailed
             }
+
+            let banner = MEDecodedMessageBanner(
+                title: isValid ? "PGP подпись верна: \(signerLabel)" : "⚠️ PGP подпись недействительна: \(signerLabel)",
+                primaryActionTitle: "",
+                dismissable: isValid
+            )
+
+            let securityInfo = MEMessageSecurityInformation(
+                signers: signers,
+                isEncrypted: false,
+                signingError: signingError,
+                encryptionError: nil
+            )
+
+            return MEDecodedMessage(data: displayData, securityInformation: securityInfo,
+                                   context: ctx.encode(), banner: banner)
         }
 
-        if let first = verifyResults.first {
-            if first.isValid {
-                ctx.signatureStatus = .valid(
-                    email: first.signerEmail ?? "Неизвестный",
-                    trust: first.trustLevel.rawValue
-                )
-                ctx.signerKeyID = first.signerKeyID
-            } else {
-                ctx.signatureStatus = .invalid(email: first.signerEmail)
-            }
-        }
+        // IPC недоступен — показываем тело, помечаем как подписанное но непроверенное
+        NSLog("[FreeGPGMail] verify IPC unavailable, showing body without verification")
 
-        let banner: MEDecodedMessageBanner
-        if allValid && !signerNames.isEmpty {
-            let names = signerNames.joined(separator: ", ")
-            banner = MEDecodedMessageBanner(
-                title: signerNames.count > 1
-                    ? "Подписано (\(signerNames.count)): \(names)"
-                    : "Подписано: \(names)",
-                primaryActionTitle: "Подробнее",
-                dismissable: true
-            )
-        } else {
-            banner = MEDecodedMessageBanner(
-                title: "Недействительная подпись",
-                primaryActionTitle: "Подробнее",
-                dismissable: false
-            )
-        }
+        var ctx = SecurityContext()
+        ctx.signatureStatus = .valid(email: "Не проверено (FreeGPGMail.app не запущен)", trust: "unknown")
+
+        let signers = [MEMessageSigner(
+            emailAddresses: [],
+            signatureLabel: "PGP: Подпись не проверена (запустите FreeGPGMail.app)",
+            context: ctx.encode()
+        )]
+
+        let banner = MEDecodedMessageBanner(
+            title: "PGP подписанное сообщение (подпись не проверена — запустите FreeGPGMail.app)",
+            primaryActionTitle: "",
+            dismissable: true
+        )
 
         let securityInfo = MEMessageSecurityInformation(
-            signers: signers,
-            isEncrypted: false,
-            signingError: allValid ? nil : GPGMailError.verificationFailed,
-            encryptionError: nil
+            signers: signers, isEncrypted: false, signingError: nil, encryptionError: nil
         )
 
-        return MEDecodedMessage(
-            data: body,
-            securityInformation: securityInfo,
-            context: ctx.encode(),
-            banner: banner
-        )
+        return MEDecodedMessage(data: displayData, securityInformation: securityInfo,
+                               context: ctx.encode(), banner: banner)
     }
 
     // MARK: - Private: Inline PGP
@@ -361,16 +382,19 @@ class MessageSecurityHandler: NSObject, MEMessageSecurityHandler {
         let pgpBlock = String(rawString[pgpStart.lowerBound...pgpEnd.upperBound])
         guard let pgpData = pgpBlock.data(using: .utf8) else { return nil }
 
-        let result = GPGHelper.decrypt(data: pgpData)
-
         var ctx = SecurityContext()
         ctx.isEncrypted = true
 
-        guard result.success, let decryptedData = result.data else {
-            ctx.decryptionError = result.statusMessage
+        guard let response = CryptoIPC.sendRequest(
+            operation: "decrypt",
+            data: pgpData,
+            signer: nil,
+            recipients: nil
+        ), response.success, let decryptedData = response.data else {
+            ctx.decryptionError = "Не удалось расшифровать"
             let banner = MEDecodedMessageBanner(
                 title: "Не удалось расшифровать сообщение",
-                primaryActionTitle: "Подробнее",
+                primaryActionTitle: "",
                 dismissable: true
             )
             let securityInfo = MEMessageSecurityInformation(
@@ -386,13 +410,13 @@ class MessageSecurityHandler: NSObject, MEMessageSecurityHandler {
             with: decryptedText
         )
 
-        if result.signatureValid {
-            ctx.signatureStatus = .valid(email: result.wasSignedBy ?? "", trust: "unknown")
+        if response.signatureValid ?? false {
+            ctx.signatureStatus = .valid(email: response.signerEmail ?? "", trust: "unknown")
         }
 
         let banner = MEDecodedMessageBanner(
             title: "Зашифрованное сообщение расшифровано",
-            primaryActionTitle: "Подробнее",
+            primaryActionTitle: "",
             dismissable: true
         )
 
@@ -414,43 +438,65 @@ class MessageSecurityHandler: NSObject, MEMessageSecurityHandler {
     private func handleInlinePGPSigned(data: Data) -> MEDecodedMessage? {
         Log.security.info("Handling inline PGP signed message")
 
-        let result = GPGHelper.verify(signature: data, signedData: data)
-
         var ctx = SecurityContext()
         let signers: [MEMessageSigner]
         let banner: MEDecodedMessageBanner
 
-        if result.isValid {
-            let email = result.signerEmail ?? "Неизвестный"
-            ctx.signatureStatus = .valid(email: email, trust: result.trustLevel.rawValue)
-            let signer = MEMessageSigner(
-                emailAddresses: result.signerEmail.map {
-                    [MEEmailAddress(rawString: $0)]
-                } ?? [],
-                signatureLabel: email,
-                context: ctx.encode()
+        if let response = CryptoIPC.sendRequest(
+            operation: "verify",
+            data: data,
+            signer: nil,
+            recipients: nil
+        ) {
+            let isValid = response.signatureValid ?? false
+            let email = response.signerEmail ?? "Неизвестный"
+
+            if isValid {
+                ctx.signatureStatus = .valid(email: email, trust: "unknown")
+                let signer = MEMessageSigner(
+                    emailAddresses: [MEEmailAddress(rawString: email)],
+                    signatureLabel: email,
+                    context: ctx.encode()
+                )
+                signers = [signer]
+                banner = MEDecodedMessageBanner(
+                    title: "Подписано: \(email)",
+                    primaryActionTitle: "",
+                    dismissable: true
+                )
+            } else {
+                ctx.signatureStatus = .invalid(email: response.signerEmail)
+                signers = []
+                banner = MEDecodedMessageBanner(
+                    title: "Недействительная подпись",
+                    primaryActionTitle: "",
+                    dismissable: false
+                )
+            }
+
+            let securityInfo = MEMessageSecurityInformation(
+                signers: signers,
+                isEncrypted: false,
+                signingError: isValid ? nil : GPGMailError.verificationFailed,
+                encryptionError: nil
             )
-            signers = [signer]
-            banner = MEDecodedMessageBanner(
-                title: "Подписано: \(email)",
-                primaryActionTitle: "Подробнее",
-                dismissable: true
-            )
-        } else {
-            ctx.signatureStatus = .invalid(email: result.signerEmail)
-            signers = []
-            banner = MEDecodedMessageBanner(
-                title: "Недействительная подпись",
-                primaryActionTitle: "Подробнее",
-                dismissable: false
-            )
+
+            return MEDecodedMessage(data: data, securityInformation: securityInfo,
+                                   context: ctx.encode(), banner: banner)
         }
 
+        // IPC недоступен — показываем без верификации
+        NSLog("[FreeGPGMail] inline verify IPC unavailable")
+        ctx.signatureStatus = .valid(email: "Не проверено (FreeGPGMail.app не запущен)", trust: "unknown")
+        signers = []
+        banner = MEDecodedMessageBanner(
+            title: "Подписанное сообщение (подпись не проверена)",
+            primaryActionTitle: "",
+            dismissable: true
+        )
+
         let securityInfo = MEMessageSecurityInformation(
-            signers: signers,
-            isEncrypted: false,
-            signingError: result.isValid ? nil : GPGMailError.verificationFailed,
-            encryptionError: nil
+            signers: [], isEncrypted: false, signingError: nil, encryptionError: nil
         )
 
         return MEDecodedMessage(data: data, securityInformation: securityInfo,

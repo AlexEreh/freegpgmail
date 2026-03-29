@@ -202,46 +202,40 @@ enum MIMEHelper {
 
     /// Извлекает части PGP/MIME signed сообщения
     static func parseSignedMessage(data: Data, boundary: String) -> (body: Data, signature: Data)? {
-        guard let str = String(data: data, encoding: .utf8) else { return nil }
+        // ВАЖНО: работаем на уровне байтов, а не Swift String,
+        // потому что Swift считает \r\n одним Character и dropFirst(2) удаляет 2 символа, а не 2 байта.
+        let delimiter = "--\(boundary)".data(using: .utf8)!
 
-        let parts = str.components(separatedBy: "--\(boundary)")
-        guard parts.count >= 3 else { return nil }
+        // Находим первое вхождение delimiter (начало тела)
+        guard let firstRange = data.range(of: delimiter) else { return nil }
+        let afterFirst = firstRange.upperBound
 
-        let bodyPart = parts[1]
-        let sigPart = parts[2]
+        // Пропускаем \r\n после delimiter
+        var bodyStart = afterFirst
+        if bodyStart < data.count && data[bodyStart] == 0x0D { bodyStart += 1 } // \r
+        if bodyStart < data.count && data[bodyStart] == 0x0A { bodyStart += 1 } // \n
 
-        // Для верификации подписи тело должно быть точным (включая CRLF после boundary delimiter)
-        let bodyContent: String
-        if bodyPart.hasPrefix("\r\n") {
-            bodyContent = String(bodyPart.dropFirst(2))
-        } else if bodyPart.hasPrefix("\n") {
-            bodyContent = String(bodyPart.dropFirst(1))
-        } else {
-            bodyContent = bodyPart
-        }
+        // Находим второе вхождение delimiter (начало подписи)
+        guard let secondRange = data[bodyStart...].range(of: delimiter) else { return nil }
 
-        // Убираем trailing CRLF перед boundary
-        let bodyTrimmed: String
-        if bodyContent.hasSuffix("\r\n") {
-            bodyTrimmed = String(bodyContent.dropLast(2))
-        } else if bodyContent.hasSuffix("\n") {
-            bodyTrimmed = String(bodyContent.dropLast(1))
-        } else {
-            bodyTrimmed = bodyContent
-        }
+        // Тело — от bodyStart до secondRange, без trailing \r\n
+        var bodyEnd = secondRange.lowerBound
+        if bodyEnd > bodyStart && data[bodyEnd - 1] == 0x0A { bodyEnd -= 1 } // \n
+        if bodyEnd > bodyStart && data[bodyEnd - 1] == 0x0D { bodyEnd -= 1 } // \r
 
-        guard let sigRange = sigPart.range(of: "-----BEGIN PGP SIGNATURE-----"),
-              let sigEnd = sigPart.range(of: "-----END PGP SIGNATURE-----") else {
+        let bodyData = data[bodyStart..<bodyEnd]
+
+        // Подпись — после второго delimiter
+        let sigSection = data[secondRange.upperBound...]
+        guard let sigStr = String(data: sigSection, encoding: .utf8) else { return nil }
+        guard let sigBegin = sigStr.range(of: "-----BEGIN PGP SIGNATURE-----"),
+              let sigEnd = sigStr.range(of: "-----END PGP SIGNATURE-----") else {
             return nil
         }
-        let sigContent = String(sigPart[sigRange.lowerBound...sigEnd.upperBound])
+        let sigContent = String(sigStr[sigBegin.lowerBound...sigEnd.upperBound])
+        guard let sigData = sigContent.data(using: .utf8) else { return nil }
 
-        guard let bodyData = bodyTrimmed.data(using: .utf8),
-              let sigData = sigContent.data(using: .utf8) else {
-            return nil
-        }
-
-        return (bodyData, sigData)
+        return (Data(bodyData), sigData)
     }
 
     /// Парсит PGP/MIME signed сообщение с множественными подписями
@@ -402,6 +396,181 @@ enum MIMEHelper {
         return (headersStr, contentType, bodyData)
     }
 
+    /// Убирает multipart/signed обёртку, возвращает email без подписи.
+    /// Просто заменяет Content-Type: multipart/signed на содержимое подписанной части.
+    /// signedBody уже содержит свой Content-Type (например multipart/alternative) и тело.
+    static func extractDisplayContent(from signedBody: Data, originalEmail: Data) -> Data? {
+        guard let rawStr = String(data: originalEmail, encoding: .utf8) else {
+            NSLog("[FreeGPGMail] extractDisplayContent: cannot decode original email as UTF-8")
+            return nil
+        }
+
+        // Находим конец заголовков
+        let sep: String
+        guard let headerEnd = rawStr.range(of: "\r\n\r\n") ?? rawStr.range(of: "\n\n") else {
+            NSLog("[FreeGPGMail] extractDisplayContent: no header/body separator")
+            return nil
+        }
+        sep = rawStr.range(of: "\r\n\r\n") != nil ? "\r\n" : "\n"
+
+        let headerSection = String(rawStr[rawStr.startIndex..<headerEnd.lowerBound])
+
+        // Фильтруем заголовки — убираем Content-Type, CTE, MIME-Version
+        var filteredHeaders: [String] = []
+        let lines = headerSection.components(separatedBy: sep)
+        var idx = 0
+        while idx < lines.count {
+            let line = lines[idx]
+            let lower = line.lowercased()
+            if lower.hasPrefix("content-type:") || lower.hasPrefix("content-transfer-encoding:") || lower.hasPrefix("mime-version:") {
+                idx += 1
+                // Пропускаем continuation lines
+                while idx < lines.count && (lines[idx].hasPrefix(" ") || lines[idx].hasPrefix("\t")) {
+                    idx += 1
+                }
+                continue
+            }
+            filteredHeaders.append(line)
+            idx += 1
+        }
+
+        // Собираем: отфильтрованные заголовки + MIME-Version + signedBody (содержит Content-Type и тело)
+        var result = Data()
+        let headersJoined = filteredHeaders.joined(separator: sep)
+        result.append(headersJoined.data(using: .utf8)!)
+        result.append("\(sep)MIME-Version: 1.0\(sep)".data(using: .utf8)!)
+        result.append(signedBody)
+
+        if let preview = String(data: result, encoding: .utf8) {
+            NSLog("[FreeGPGMail] extractDisplayContent: result size=%d, first 300: %@",
+                  result.count, String(preview.prefix(300)))
+        }
+
+        return result
+    }
+
+    /// Извлекает лучшую часть из multipart (предпочитает text/html)
+    /// Возвращает декодированный контент
+    private static func extractBestContentPart(from content: String, boundary: String) -> (contentType: String, decodedContent: Data)? {
+        let parts = content.components(separatedBy: "--\(boundary)")
+
+        var htmlPart: (contentType: String, decodedContent: Data)?
+        var plainPart: (contentType: String, decodedContent: Data)?
+
+        for part in parts {
+            let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed == "--" { continue }
+
+            // Разделяем заголовки и тело
+            let sep = trimmed.contains("\r\n\r\n") ? "\r\n\r\n" : "\n\n"
+            guard let sepRange = trimmed.range(of: sep) else { continue }
+
+            let headers = String(trimmed[trimmed.startIndex..<sepRange.lowerBound])
+            let body = String(trimmed[sepRange.upperBound...])
+
+            let ct = extractHeaderValue(from: headers, header: "content-type") ?? "text/plain"
+            let cte = extractHeaderValue(from: headers, header: "content-transfer-encoding")?.lowercased()
+
+            guard let decoded = decodeContent(body, encoding: cte) else { continue }
+
+            if ct.lowercased().contains("text/html") {
+                htmlPart = (ct, decoded)
+            } else if ct.lowercased().contains("text/plain") {
+                plainPart = (ct, decoded)
+            }
+        }
+
+        return htmlPart ?? plainPart
+    }
+
+    /// Декодирует контент из base64 или quoted-printable
+    private static func decodeContent(_ content: String, encoding: String?) -> Data? {
+        switch encoding {
+        case "base64":
+            let cleaned = content
+                .replacingOccurrences(of: "\r\n", with: "")
+                .replacingOccurrences(of: "\n", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return Data(base64Encoded: cleaned)
+        case "quoted-printable":
+            return decodeQuotedPrintable(content)
+        default:
+            return content.data(using: .utf8)
+        }
+    }
+
+    /// Декодирует quoted-printable строку
+    private static func decodeQuotedPrintable(_ input: String) -> Data? {
+        var result = Data()
+        var i = input.startIndex
+
+        while i < input.endIndex {
+            let ch = input[i]
+            if ch == "=" {
+                let next1 = input.index(after: i)
+                if next1 < input.endIndex {
+                    // Soft line break (=\r\n or =\n)
+                    if input[next1] == "\r" {
+                        let next2 = input.index(after: next1)
+                        if next2 < input.endIndex && input[next2] == "\n" {
+                            i = input.index(after: next2)
+                        } else {
+                            i = input.index(after: next1)
+                        }
+                        continue
+                    } else if input[next1] == "\n" {
+                        i = input.index(after: next1)
+                        continue
+                    }
+
+                    // Hex encoded byte
+                    let next2 = input.index(after: next1)
+                    if next2 < input.endIndex {
+                        let hex = String(input[next1...next2])
+                        if let byte = UInt8(hex, radix: 16) {
+                            result.append(byte)
+                            i = input.index(after: next2)
+                            continue
+                        }
+                    }
+                }
+                // Malformed — keep as is
+                result.append(contentsOf: "=".utf8)
+                i = input.index(after: i)
+            } else {
+                result.append(contentsOf: String(ch).utf8)
+                i = input.index(after: i)
+            }
+        }
+
+        return result
+    }
+
+    /// Извлекает значение заголовка (с учётом continuation lines)
+    private static func extractHeaderValue(from headers: String, header: String) -> String? {
+        let lines = headers.components(separatedBy: headers.contains("\r\n") ? "\r\n" : "\n")
+        let headerLower = header.lowercased() + ":"
+
+        for (i, line) in lines.enumerated() {
+            if line.lowercased().hasPrefix(headerLower) {
+                var value = String(line.dropFirst(headerLower.count)).trimmingCharacters(in: .whitespaces)
+                // Собираем continuation lines
+                var j = i + 1
+                while j < lines.count {
+                    let next = lines[j]
+                    if next.hasPrefix(" ") || next.hasPrefix("\t") {
+                        value += " " + next.trimmingCharacters(in: .whitespaces)
+                        j += 1
+                    } else {
+                        break
+                    }
+                }
+                return value
+            }
+        }
+        return nil
+    }
+
     /// Строит полный PGP/MIME signed email из raw email data
     static func buildSignedEmail(rawEmail: Data, signature: Data, boundary: String) -> Data? {
         guard let parts = splitRawEmail(rawEmail) else { return nil }
@@ -477,19 +646,6 @@ enum MIMEHelper {
     }
 
     // MARK: - Header Parsing Helpers
-
-    private static func extractHeaderValue(from headers: String, header: String) -> String? {
-        let headerLower = header.lowercased() + ":"
-        for line in headers.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .init(charactersIn: "\r"))
-            if trimmed.lowercased().hasPrefix(headerLower) {
-                let value = String(trimmed.dropFirst(headerLower.count)).trimmingCharacters(in: .whitespaces)
-                // Берём только основное значение (до ;)
-                return value.components(separatedBy: ";").first?.trimmingCharacters(in: .whitespaces)
-            }
-        }
-        return nil
-    }
 
     private static func extractFilename(from headers: String) -> String? {
         let patterns = ["filename=\"", "name=\""]

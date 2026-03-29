@@ -9,10 +9,20 @@ enum CryptoIPC {
 
     struct Request: Codable {
         let id: String
-        let operation: String  // "sign", "encrypt", "sign+encrypt"
+        let operation: String  // "sign", "encrypt", "sign+encrypt", "verify", "decrypt"
         let data: Data
         let signer: String?
         let recipients: [String]?
+        let signatureData: Data?  // Для verify: отдельная подпись
+
+        init(id: String, operation: String, data: Data, signer: String?, recipients: [String]?, signatureData: Data? = nil) {
+            self.id = id
+            self.operation = operation
+            self.data = data
+            self.signer = signer
+            self.recipients = recipients
+            self.signatureData = signatureData
+        }
     }
 
     struct Response: Codable {
@@ -22,12 +32,45 @@ enum CryptoIPC {
         let error: String?
         let isSigned: Bool
         let isEncrypted: Bool
+        let signerEmail: String?
+        let signatureValid: Bool?
+        // Расширенная информация о подписи
+        let signerKeyID: String?
+        let trustLevel: String?          // ultimate, full, marginal, undefined, never, expired, unknown
+        let keyFingerprint: String?
+        let keyCreationDate: Date?
+        let keyExpirationDate: Date?
+        let signerUserID: String?
+        let verificationDetail: String?  // Детали верификации (причина ошибки или статус GPG)
+
+        init(id: String, success: Bool, data: Data?, error: String?, isSigned: Bool, isEncrypted: Bool,
+             signerEmail: String? = nil, signatureValid: Bool? = nil,
+             signerKeyID: String? = nil, trustLevel: String? = nil,
+             keyFingerprint: String? = nil, keyCreationDate: Date? = nil,
+             keyExpirationDate: Date? = nil, signerUserID: String? = nil,
+             verificationDetail: String? = nil) {
+            self.id = id
+            self.success = success
+            self.data = data
+            self.error = error
+            self.isSigned = isSigned
+            self.isEncrypted = isEncrypted
+            self.signerEmail = signerEmail
+            self.signatureValid = signatureValid
+            self.signerKeyID = signerKeyID
+            self.trustLevel = trustLevel
+            self.keyFingerprint = keyFingerprint
+            self.keyCreationDate = keyCreationDate
+            self.keyExpirationDate = keyExpirationDate
+            self.signerUserID = signerUserID
+            self.verificationDetail = verificationDetail
+        }
     }
 
     /// Вызывается из расширения: отправляет запрос и ждёт ответ
-    static func sendRequest(operation: String, data: Data, signer: String?, recipients: [String]?) -> Response? {
+    static func sendRequest(operation: String, data: Data, signer: String?, recipients: [String]?, signatureData: Data? = nil) -> Response? {
         let requestID = UUID().uuidString
-        let request = Request(id: requestID, operation: operation, data: data, signer: signer, recipients: recipients)
+        let request = Request(id: requestID, operation: operation, data: data, signer: signer, recipients: recipients, signatureData: signatureData)
 
         // Создаём директорию если нет
         try? FileManager.default.createDirectory(atPath: requestDir, withIntermediateDirectories: true)
@@ -139,6 +182,43 @@ enum CryptoIPC {
                     }
                 } else {
                     response = Response(id: request.id, success: false, data: nil, error: "Не удалось подписать и зашифровать письмо.", isSigned: false, isEncrypted: false)
+                }
+
+            case "verify":
+                // request.data = signed data, request.signatureData = detached signature
+                let verifyResult: GPGHelper.VerifyResult
+                if let sigData = request.signatureData {
+                    verifyResult = GPGHelper.verify(signature: sigData, signedData: request.data)
+                } else {
+                    verifyResult = GPGHelper.verify(signature: request.data, signedData: request.data)
+                }
+                // Подтягиваем расширенную информацию о ключе подписанта
+                let keyInfo: GPGKeyInfo?
+                if let email = verifyResult.signerEmail {
+                    keyInfo = GPGHelper.findKey(for: email)
+                } else {
+                    keyInfo = nil
+                }
+                response = Response(id: request.id, success: true, data: request.data, error: nil,
+                                   isSigned: true, isEncrypted: false,
+                                   signerEmail: verifyResult.signerEmail, signatureValid: verifyResult.isValid,
+                                   signerKeyID: verifyResult.signerKeyID,
+                                   trustLevel: verifyResult.trustLevel.rawValue,
+                                   keyFingerprint: keyInfo?.fingerprint,
+                                   keyCreationDate: keyInfo?.creationDate,
+                                   keyExpirationDate: keyInfo?.expirationDate,
+                                   signerUserID: keyInfo?.userID,
+                                   verificationDetail: verifyResult.statusMessage)
+
+            case "decrypt":
+                let result = GPGHelper.decrypt(data: request.data)
+                if result.success, let decData = result.data {
+                    response = Response(id: request.id, success: true, data: decData, error: nil,
+                                       isSigned: result.wasSignedBy != nil, isEncrypted: true,
+                                       signerEmail: result.wasSignedBy, signatureValid: result.signatureValid)
+                } else {
+                    response = Response(id: request.id, success: false, data: nil,
+                                       error: result.statusMessage, isSigned: false, isEncrypted: true)
                 }
 
             default:

@@ -290,8 +290,9 @@ enum GPGHelper {
                               statusMessage: "Подпись верна", trustLevel: trustLevel)
         } else {
             Log.security.warning("Signature invalid")
+            let reason = extractVerificationFailureReason(from: stderrStr)
             return VerifyResult(isValid: false, signerEmail: signerEmail, signerKeyID: signerKeyID,
-                              statusMessage: "Подпись недействительна", trustLevel: .unknown)
+                              statusMessage: reason, trustLevel: .unknown)
         }
     }
 
@@ -854,6 +855,44 @@ enum GPGHelper {
             }
         }
         return nil
+    }
+
+    private static func extractVerificationFailureReason(from gpgOutput: String) -> String {
+        // NO_PUBKEY — ключ подписанта отсутствует
+        if gpgOutput.contains("[GNUPG:] NO_PUBKEY") {
+            if let keyID = extractKeyID(from: gpgOutput) {
+                return "Публичный ключ подписанта (\(keyID)) отсутствует в вашей связке. Импортируйте ключ для проверки подписи."
+            }
+            return "Публичный ключ подписанта отсутствует в вашей связке. Импортируйте ключ для проверки подписи."
+        }
+        // BADSIG — подпись не совпадает (данные изменены)
+        if gpgOutput.contains("[GNUPG:] BADSIG") {
+            return "Подпись не совпадает с содержимым письма. Сообщение могло быть изменено после подписания."
+        }
+        // ERRSIG — ошибка проверки (неподдерживаемый алгоритм и т.д.)
+        if gpgOutput.contains("[GNUPG:] ERRSIG") {
+            if gpgOutput.contains("algorithm") || gpgOutput.contains("unsupported") {
+                return "Неподдерживаемый алгоритм подписи. Обновите GPG для поддержки новых алгоритмов."
+            }
+            return "Ошибка проверки подписи. Возможно, неподдерживаемый алгоритм или повреждённая подпись."
+        }
+        // EXPKEYSIG — подпись от истёкшего ключа
+        if gpgOutput.contains("[GNUPG:] EXPKEYSIG") {
+            return "Подпись сделана ключом с истёкшим сроком действия."
+        }
+        // REVKEYSIG — подпись от отозванного ключа
+        if gpgOutput.contains("[GNUPG:] REVKEYSIG") {
+            return "Подпись сделана отозванным ключом. Этому ключу нельзя доверять."
+        }
+        // EXPSIG — сама подпись истекла
+        if gpgOutput.contains("[GNUPG:] EXPSIG") {
+            return "Срок действия подписи истёк."
+        }
+        // Общий fallback
+        if gpgOutput.contains("Bad signature") {
+            return "Подпись не совпадает с содержимым. Сообщение могло быть изменено."
+        }
+        return "Подпись недействительна. Не удалось определить причину."
     }
 
     private static func extractTrustLevel(from gpgOutput: String) -> VerifyResult.TrustLevel {
